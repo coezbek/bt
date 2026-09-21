@@ -12,6 +12,7 @@
 #include "win32/shell.h"
 #include "win32/os.h"
 #include "win32/user.h"
+#include <fstream>
 #endif
 
 namespace fs = std::filesystem;
@@ -67,7 +68,21 @@ namespace bt {
         // is shown) never activates a window itself, so the right is not passed on to the process we start.
         // When the browser is already running, that process only hands the URL over to the running instance,
         // which then cannot come to the front and just flashes in the taskbar (#39).
-        ::AllowSetForegroundWindow(ASFW_ANY);
+        BOOL asfw_ok = ::AllowSetForegroundWindow(ASFW_ANY);
+        DWORD asfw_err = asfw_ok ? 0 : ::GetLastError();
+        {
+            // DEBUG ONLY - not for upstream
+            DWORD fg_pid{0};
+            HWND fg = ::GetForegroundWindow();
+            ::GetWindowThreadProcessId(fg, &fg_pid);
+            wchar_t tmp[MAX_PATH];
+            ::GetTempPathW(MAX_PATH, tmp);
+            std::ofstream dbg{fs::path{tmp} / "bt-foreground-debug.log", std::ios::app};
+            dbg << "tick=" << ::GetTickCount64() << " bt_pid=" << ::GetCurrentProcessId()
+                << " asfw_ok=" << asfw_ok << " err=" << asfw_err
+                << " fg_hwnd=" << fg << " fg_pid=" << fg_pid
+                << " cmd=" << cmdline << "\n";
+        }
 #endif
 
         process p = process::start(cmdline, false, profile.no_window);
