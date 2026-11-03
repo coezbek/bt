@@ -1,7 +1,7 @@
 From 44a564a91dc5a3ec127975c31b1001ba89d2485e Mon Sep 17 00:00:00 2001
 From: Christopher Oezbek <c.oezbek@gmail.com>
 Date: Tue, 3 Nov 2026 22:49:23 +0100
-Subject: [PATCH] Add win32_software_renderer option to render with WARP
+Subject: [PATCH 1/2] Add win32_software_renderer option to render with WARP
 
 ---
  grey/app.h                       | 7 +++++++
@@ -66,6 +66,46 @@ index f3448d4..3cc47c4 100644
                  CleanupDeviceD3D();
                  ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
                  return;
+-- 
+2.53.0
+
+
+From 46c252e408eab2b886016fb8bdd54a8c91557353 Mon Sep 17 00:00:00 2001
+From: Christopher Oezbek <c.oezbek@gmail.com>
+Date: Wed, 4 Nov 2026 00:01:23 +0100
+Subject: [PATCH 2/2] Show the window only after a frame rendered at its final
+ size
+
+---
+ grey/backends/win32_dx11_app.hpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/grey/backends/win32_dx11_app.hpp b/grey/backends/win32_dx11_app.hpp
+index 3cc47c4..4df0ce5 100644
+--- a/grey/backends/win32_dx11_app.hpp
++++ b/grey/backends/win32_dx11_app.hpp
+@@ -581,6 +581,7 @@ namespace grey::backends {
+             // Main loop
+             bool done{false};
+             bool shown{false};
++            int frames_before_show{0};
+ 
+             // one time initialization
+             on_after_initialised();
+@@ -647,8 +648,11 @@ namespace grey::backends {
+                 //HRESULT hr = g_pSwapChain->Present(0, 0); // Present without vsync
+                 g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
+ 
+-                // show after first frame is rendered
+-                if(!shown) {
++                // Show after the first frame that was rendered at the window's final size. If the frame resized
++                // the window, the swap chain is only resized at the start of the next frame, so this frame was
++                // drawn at the old size and Windows would stretch it for one frame. Give up waiting after a few
++                // frames in case an app resizes on every frame.
++                if(!shown && ((g_ResizeWidth == 0 && g_ResizeHeight == 0) || ++frames_before_show > 5)) {
+                     ::ShowWindow(hWnd, SW_SHOWNORMAL);
+                     shown = true;
+                 }
 -- 
 2.53.0
 
