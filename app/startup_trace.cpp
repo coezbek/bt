@@ -2,14 +2,14 @@
 #include <string>
 #include <vector>
 #include <utility>
-#if PLATFORM_WINDOWS
+#ifdef _WIN32
 #include <windows.h>
 #include <fstream>
 #include <filesystem>
 #endif
 
 namespace bt::trace {
-#if PLATFORM_WINDOWS
+#ifdef _WIN32
     static std::vector<std::pair<std::string, double>>& marks() {
         static std::vector<std::pair<std::string, double>> m;
         return m;
