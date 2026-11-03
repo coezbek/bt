@@ -61,6 +61,9 @@ FetchContent_Declare(grey
     GIT_TAG        202610
     GIT_SHALLOW    TRUE
     SOURCE_SUBDIR  grey
+    # DEBUG ONLY: grey change not released yet
+    PATCH_COMMAND  git apply --ignore-whitespace ${CMAKE_CURRENT_SOURCE_DIR}/patches/grey-software-renderer.patch
+    UPDATE_DISCONNECTED TRUE
 )
 
 FetchContent_MakeAvailable(grey)
