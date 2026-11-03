@@ -39,30 +39,6 @@ jobs:
             vcpkg_config: Release
             artifact_suffix: -win-x64
             artifact_pattern: '*.msi'
-          - os: windows-11-arm
-            name: Windows ARM64
-            vcpkg_triplet: arm64-windows-static
-            vcpkg_config: Release
-            artifact_suffix: -win-arm64
-            artifact_pattern: '*.msi'
-          - os: ubuntu-latest
-            name: Linux x64
-            vcpkg_triplet: x64-linux
-            vcpkg_config: MinSizeRel
-            artifact_suffix: -linux-x64
-            artifact_pattern: '*.deb'
-          - os: macos-latest
-            name: Apple Silicon
-            vcpkg_triplet: arm64-osx
-            vcpkg_config: MinSizeRel
-            artifact_suffix: -mac-arm64
-            artifact_pattern: '*.dmg'
-          - os: macos-26-intel
-            name: Apple x64 Intel
-            vcpkg_triplet: x64-osx
-            vcpkg_config: MinSizeRel
-            artifact_suffix: -mac-x64
-            artifact_pattern: '*.dmg'
 
     name: 'build: ${{ matrix.name }}'
     env:
