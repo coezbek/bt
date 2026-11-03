@@ -423,7 +423,17 @@ namespace bt::ui {
 
     void picker::toggle_rule_creator() {
         rule_open = !rule_open;
+        RECT before{};
+        ::GetWindowRect(wnd, &before);
         compute_layout();
+        // keep the window where it is; it only grows or shrinks at the bottom, and moves up only
+        // as far as needed to stay on screen
+        const int h = target.bottom - target.top;
+        HMONITOR mon = ::MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{sizeof(mi)};
+        ::GetMonitorInfoW(mon, &mi);
+        const int top = max(static_cast<int>(mi.rcWork.top), min(static_cast<int>(before.top), static_cast<int>(mi.rcWork.bottom) - h));
+        target = {before.left, top, before.left + (target.right - target.left), top + h};
         place_controls();
         render();
         move_window(SWP_NOACTIVATE);
