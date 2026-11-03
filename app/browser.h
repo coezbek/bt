@@ -4,7 +4,7 @@
 #include <optional>
 #include "match_rule.h"
 #include "click_payload.h"
-#include "../grey/model.h"
+#include "common/colour.h"
 
 namespace bt {
     class browser_profile;
