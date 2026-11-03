@@ -75,7 +75,7 @@ namespace bt::ui {
 
         bool run_frame();
         void recalc();
-        void request_foreground();
+        bool request_foreground();
         void render_action_menu();
         void render_rule_creator();
         void render_list();
