@@ -66,6 +66,7 @@ namespace bt::ui {
         int box{0}, margin{0}, tile{0}, per_row{1}, rows{1}, grid_x{0}, grid_y{0};
         int icon_px{0}, label_lines{0}, label_h{0};
         SIZE client{};
+        RECT url_box{}, rule_box{};   // field backgrounds drawn by us; the edits inside are one line high
         RECT target{};          // window rect for the current layout
         UINT font_dpi{0};       // DPI the child control fonts were set for
 

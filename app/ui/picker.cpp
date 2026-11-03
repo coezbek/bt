@@ -293,8 +293,17 @@ namespace bt::ui {
             left += btn_w + scale(4, dpi);
         }
 
-        const int edit_h = font_height(font) + scale(8, dpi);
-        ::MoveWindow(url_edit, left, pad + (bh - edit_h) / 2, max(10, right - left), edit_h, FALSE);
+        // A single-line Edit draws its text at the top. So the edit is exactly one line high and centred
+        // in a taller box that render() paints, which centres the text vertically.
+        const int text_h = font_height(font);
+        const int edit_h = text_h + scale(8, dpi);
+        const int inset = scale(6, dpi);
+        auto place_field = [&](HWND h, RECT& box, int x, int y, int w) {
+            box = {x, y, x + w, y + edit_h};
+            ::MoveWindow(h, x + inset, y + (edit_h - text_h) / 2, max(10, w - inset * 2), text_h, FALSE);
+        };
+        place_field(url_edit, url_box, left, pad + (bh - edit_h) / 2, max(10, right - left));
+        rule_box = {};
 
         // rule creator row
         const int show = rule_open ? SW_SHOWNA : SW_HIDE;
@@ -307,7 +316,7 @@ namespace bt::ui {
             ::MoveWindow(rule_loc, x, y + (row_h - edit_h) / 2, loc_w, scale(200, dpi), FALSE);
             x += loc_w + scale(4, dpi);
             int value_w = client.cx - pad - x - scope_w - btn_w * 2 - scale(12, dpi);
-            ::MoveWindow(rule_value, x, y + (row_h - edit_h) / 2, max(10, value_w), edit_h, FALSE);
+            place_field(rule_value, rule_box, x, y + (row_h - edit_h) / 2, max(10, value_w));
             x += value_w + scale(4, dpi);
             ::MoveWindow(rule_scope, x, y + (row_h - edit_h) / 2, scope_w, scale(200, dpi), FALSE);
             x += scope_w + scale(4, dpi);
@@ -640,6 +649,17 @@ namespace bt::ui {
         RECT rc{0, 0, w, h};
         const palette pal = colours(dark);
         ::FillRect(hdc, &rc, cached_brush(pal.bg));
+        for(const RECT& box : {url_box, rule_box}) {
+            if(box.right <= box.left) continue;
+            HGDIOBJ old_b = ::SelectObject(hdc, cached_brush(pal.edit_bg));
+            HPEN pen = ::CreatePen(PS_SOLID, 1, pal.border);
+            HGDIOBJ old_p = ::SelectObject(hdc, pen);
+            const int r = scale(6, dpi);
+            ::RoundRect(hdc, box.left, box.top, box.right, box.bottom, r, r);
+            ::SelectObject(hdc, old_p);
+            ::SelectObject(hdc, old_b);
+            ::DeleteObject(pen);
+        }
         paint_tiles(hdc);
 
         int bw = g_state.picker.border_width;
