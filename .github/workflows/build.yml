@@ -1,4 +1,4 @@
-﻿name: 'Build'
+name: 'Build'
 
 env:
   BUILD_TYPE: Release
@@ -8,7 +8,7 @@ on:
   push:
     branches:
       - master
-      - FetchContent
+      - win32
     tags:
       - 'v*'              # release only when pushing a version tag
   pull_request:
