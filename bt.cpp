@@ -1,247 +1,144 @@
-﻿#include <format>
-#include <thread>
+// Entry point. Windows starts bt.exe for every link click, so this file keeps the forwarding path tiny:
+// find the resident process, hand the click over, exit. Only the first start (or --background at sign-in)
+// pays for loading config, Lua, ClearURLs and the UI.
+#include <windows.h>
+#include <string>
 #include "globals.h"
 #include "common/str.h"
-#include "common/process.h"
-#include "app/url_pipeline.h"
-#include "app/rule_hit_log.h"
-#include "app/url_opener.h"
 #include "cmdline.h"
-#include "app/discovery.h"
-
-#if PLATFORM_WINDOWS
-#include <windows.h>
-#include <shellapi.h>
-#include "common/win32/os.h"
-#include "common/win32/window.h"
-#endif
-
-//ui
-#include "app/ui/config_app.h"
-#include "app/ui/picker_app.h"
-#include "app/ui/toast_app.h"
+#include "app/request.h"
+#include "app/host.h"
 
 using namespace std;
 using namespace grey::common;
 using namespace bt;
 
-void open(click_payload cp, bool force_picker = false) {
-    g_pipeline.process(cp);
-
-    // decision whether to show picker or not
-    bool show_picker{force_picker};
-    optional<picker_invoked_reason> picker_reason;
-    bool picker_hotkey_down = ui::picker_app::is_hotkey_down();
-
-    vector<browser_match_result> rule_matches;
-    if(!force_picker) {
-        if(ui::picker_app::is_hotkey_down()) {
-            show_picker = true;
-            picker_reason = picker_invoked_reason::hotkey_down;
-        } else {
-            rule_matches = browser::match(g_state.browsers, cp, g_script);
-            if(rule_matches.size() > 1) {
-                show_picker = true;
-                picker_reason = picker_invoked_reason::rule_conflict;
-            } else if(rule_matches.size() == 1) {
-                if(g_state.picker.invoke.on_no_rule && rule_matches[0].rule.is_fallback) {
-                    show_picker = true;
-                    picker_reason = picker_invoked_reason::no_rule_defined;
-                }
-            }
-        }
-    } else {
-        picker_reason = picker_invoked_reason::forced;
-    }
-
-    if(show_picker) {
-        // choice narrows down only on rule conflict
-        vector<profile_selection> limited_choices;
-        if(picker_reason == picker_invoked_reason::rule_conflict) {
-            for(auto& match : rule_matches) {
-                limited_choices.push_back(match.profile);
-            }
-        }
-        ui::picker_app app{cp, limited_choices.empty() ? std::nullopt : std::make_optional(limited_choices)};
-        const auto pr = app.run();
-        if(pr) {
-            cp.url = pr.url;
-            url_opener::open(*pr.choice, cp);
-            if(g_state.log_rule_hits) {
-                rule_hit_log::i.write(cp, *pr.choice, picker_reason, nullopt);
-            }
-        }
-    } else {
-        auto matches = browser::match(g_state.browsers, cp, g_script);
-        if(matches.empty()) {
-            url_opener::open(cp);
-            return;
-        }
-
-        browser_match_result& first_match = matches[0];
-        first_match.rule.apply_to(cp);
-        url_opener::open(first_match.profile, cp);
-        if(g_state.log_rule_hits) {
-            rule_hit_log::i.write(cp, first_match.profile, std::nullopt, matches[0]);
-        }
-
-        if(g_state.toast.enabled) {
-            ui::toast_app app{cp, first_match};
-            app.run();
-        }
-    }
+static uint64_t process_start_100ns() {
+    FILETIME creation{}, exit{}, kernel{}, user{};
+    if(!::GetProcessTimes(::GetCurrentProcess(), &creation, &exit, &kernel, &user)) return 0;
+    return (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
 }
 
-static string get_command(const string& data, string& command_data) {
-    // Find the position of the first space character
-    size_t pos = data.find(' ');
-
-    // If no space is found, return the entire string
-    if(pos == std::string::npos) {
-        return "";
-    }
-
-    // Return the substring from the beginning up to the space character
-    command_data = data.substr(pos + 1);
-    return data.substr(0, pos);
+static uint64_t now_100ns() {
+    FILETIME ft{};
+    ::GetSystemTimePreciseAsFileTime(&ft);
+    return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
 }
 
-static void execute(const string& data) {
-    // will be set to "true" if "pick" command is detected
-    bool force_picker{false};
-    string clean_data = data; // copy of the data, will be used for further processing
-
-    if(data.empty() || data.starts_with(ArgSplitter)) {
-        // if data starts with ArgSplitter that means command line is empty, so we invoke the configuration util
-        ui::config_app app;
-        app.run();
-        return;
-    }
-
-    // try to extract command from the data, which is the first word in the data string
-    string command_data;
-    string command = get_command(data, command_data);
-    if(!command.empty()) {
-        if(command == "pick") {
-            // force-invoke the picker
-            force_picker = true;
-            clean_data = command_data;
-        } else if(command == "browser") {
-            cmdline c;
-            c.exec(command, command_data);
-            return;
-        } else if(command == "discover") {
-            vector<browser> fresh_browsers = discovery::discover_all_browsers();
-            fresh_browsers = browser::merge(fresh_browsers, g_state.browsers);
-            g_state.browsers = fresh_browsers;
-            g_config.serialize();
-            return;
-        }
-    }
-
-    // if we reached this point, it's a normal operation mode
-    // 0 - url
-    // 1 - HWND
-    auto parts = str::split(clean_data, ArgSplitter, true);
-    string url = parts[0];
-    click_payload cp{.url = url, .raw_url = url};
-
-
-#if PLATFORM_WINDOWS
-    cp.source_window_handle = reinterpret_cast<HWND>(str::to_ulong(parts[1], 16));
-    win32::window win{cp.source_window_handle};
-    cp.window_title = win.get_text();
-    auto pid = win.get_pid();
-    cp.process_id = std::to_string(pid);
-    process proc{pid};
-    cp.process_path = proc.get_path();
-    cp.process_name = proc.get_name();
-    cp.process_description = proc.get_description();
-#endif
-
-#if PLATFORM_LINUX
-    int pid = str::to_int(parts[1]);
-    process proc{pid};
-    cp.process_id = std::to_string(pid);
-    cp.process_name = proc.get_name();
-    cp.process_path = proc.get_path();
-    cp.process_description = proc.get_description();
-#endif
-
-#ifndef NDEBUG
-    if(command == "toast") {
-        cp.url = command_data;
-        browser_match_result bmr{browser::get_default(g_state.browsers).value(), match_rule{"a rule description"}};
-        ui::toast_app app{cp, bmr};
-        app.run();
-        return;
-    }
-#endif
-
-    cp.prettify();
-    open(cp, force_picker);   // open-up hahaha
+static uint32_t read_modifiers() {
+    uint32_t m{mod_none};
+    if(::GetAsyncKeyState(VK_SHIFT) & 0x8000) m |= mod_shift;
+    if(::GetAsyncKeyState(VK_CONTROL) & 0x8000) m |= mod_ctrl;
+    if(::GetAsyncKeyState(VK_MENU) & 0x8000) m |= mod_alt;
+    if(::GetKeyState(VK_CAPITAL) & 1) m |= mod_caps;
+    return m;
 }
 
-string get_parent_arg() {
-#if PLATFORM_WINDOWS
-    return format("{:x}", (DWORD)(win32::window::get_foreground().get_handle()));
-#else
-    // on Linux we can use parent process ID
-    process proc;
-    auto parent = proc.get_parent();
-    return format("{}", parent.get_pid());
-#endif
+static HWND find_host() {
+    return ::FindWindowW(HOST_WINDOW_CLASS, nullptr);
 }
 
 /**
- * @brief Parses incoming arguments and shapes them into universal command format.
- * @param args
- * @return 
+ * @brief Sends the request to the resident process. Returns false if there is none or it did not answer.
  */
-string parse_args(const vector<string>& args) {
-    string arg;
+static bool forward(HWND host, const request& r) {
+    // We inherited the right to take the foreground from the app the link was clicked in.
+    // Pass it on, so the picker (or the browser the resident process starts) can come to the front.
+    DWORD host_pid{0};
+    ::GetWindowThreadProcessId(host, &host_pid);
+    if(host_pid) ::AllowSetForegroundWindow(host_pid);
 
-    for(int i = 0; i < args.size(); i++) {
-        const string pt = args[i];
-        if(!arg.empty()) arg += ' ';
-        arg += pt;
+    const string payload = r.serialize();
+    COPYDATASTRUCT cds{};
+    cds.dwData = HOST_COPYDATA_ID;
+    cds.cbData = static_cast<DWORD>(payload.size());
+    cds.lpData = const_cast<char*>(payload.data());
+    DWORD_PTR result{0};
+    return ::SendMessageTimeoutW(host, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds),
+        SMTO_ABORTIFHUNG | SMTO_BLOCK, 5000, &result) != 0 && result == 1;
+}
+
+/**
+ * @brief The command line without the program name. pCmdLine is not reliable across C runtimes.
+ */
+static wstring args_after_program() {
+    const wchar_t* p = ::GetCommandLineW();
+    if(*p == L'"') {
+        p++;
+        while(*p && *p != L'"') p++;
+        if(*p) p++;
+    } else {
+        while(*p && *p != L' ' && *p != L'\t') p++;
+    }
+    while(*p == L' ' || *p == L'\t') p++;
+    return p;
+}
+
+static string first_word(const string& s, string& rest) {
+    size_t pos = s.find(' ');
+    if(pos == string::npos) {
+        rest.clear();
+        return s;
+    }
+    rest = s.substr(pos + 1);
+    str::trim(rest);
+    return s.substr(0, pos);
+}
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    request r;
+    r.launcher_main_100ns = now_100ns();
+    r.launcher_start_100ns = process_start_100ns();
+    r.modifiers = read_modifiers();
+    r.source_hwnd = reinterpret_cast<uintptr_t>(::GetForegroundWindow());
+
+    string args = str::to_str(args_after_program());
+    str::trim(args);
+    str::trim(args, "\"");
+
+    string rest;
+    const string word = first_word(args, rest);
+
+    if(args.empty()) {
+        r.kind = request_kind::config;
+    } else if(word == "--background") {
+        r.kind = request_kind::background;
+    } else if(word == "--exit") {
+        r.kind = request_kind::exit;
+    } else if(word == "discover") {
+        r.kind = request_kind::discover;
+    } else if(word == "pick") {
+        r.kind = request_kind::pick;
+        r.url = rest;
+        str::trim(r.url, "\"");
+    } else if(word == "browser") {
+        // console commands run in this process and never start the UI
+        bt_init_core();
+        cmdline c;
+        return c.exec(word, rest + ArgSplitter);
+    } else {
+        r.kind = request_kind::open;
+        r.url = args;
     }
 
-    string parent_arg = get_parent_arg();
+    if(HWND h = find_host(); h && forward(h, r)) return 0;
+    if(r.kind == request_kind::exit) return 0;
 
-    return format("{}{}{}",
-      arg,
-      ArgSplitter,
-      parent_arg);
-}
-
-string parse_args(string arg) {
-    str::trim(arg, "\"");   // arg can be quoted
-    string parent_arg = get_parent_arg();
-
-    return format("{}{}{}",
-      arg,
-      ArgSplitter,
-      parent_arg);
-}
-
-#if PLATFORM_WINDOWS
-
-int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-    // ::MessageBox(NULL, pCmdLine, NULL, MB_OK);
-    execute(parse_args(str::to_str(pCmdLine)));
-    return 0;
-}
-
-#else
-
-int main(int argc, char* argv[]) {
-    vector<string> args;
-    for (int i = 1; i < argc; i++) {
-        args.push_back(string(argv[i]));
+    // No resident process yet. Two clicks can race here; the mutex makes one of them the host and the
+    // other waits for the host window and forwards to it.
+    HANDLE mutex = ::CreateMutexW(nullptr, TRUE, HOST_MUTEX_NAME);
+    if(::GetLastError() == ERROR_ALREADY_EXISTS) {
+        for(int i = 0; i < 100; i++) {
+            if(HWND h = find_host(); h && forward(h, r)) return 0;
+            ::Sleep(50);
+        }
+        return 1;
     }
-    execute(parse_args(args));
-    return 0;
-}
 
-#endif
+    int code = host::run(r);
+    if(mutex) {
+        ::ReleaseMutex(mutex);
+        ::CloseHandle(mutex);
+    }
+    return code;
+}
