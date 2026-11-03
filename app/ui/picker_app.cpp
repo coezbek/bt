@@ -9,6 +9,7 @@
 #if PLATFORM_WINDOWS
 #include "common/win32/os.h"
 #include "common/win32/shell.h"
+#include <windows.h>
 #endif
 
 using namespace std;
@@ -89,6 +90,14 @@ namespace bt::ui {
 
     bool picker_app::run_frame() {
         app->opacity = g_state.picker.opacity;
+
+        // The window is shown at the end of the first frame with ShowWindow only. Windows does not
+        // activate it that way while the user still holds a key (e.g. Ctrl+click on a link), so the
+        // picker opens behind the current app. Ask for the foreground explicitly once it is visible.
+        if(!foreground_requested && ++frames_rendered > 1) {
+            request_foreground();
+            foreground_requested = true;
+        }
 
         {
             if(choices.empty()) {
@@ -187,6 +196,24 @@ namespace bt::ui {
         w::toast_render_frame();
 
         return is_open;
+    }
+
+    void picker_app::request_foreground() {
+#if PLATFORM_WINDOWS
+        // A plain SetForegroundWindow. grey's app::foreground() attaches to the foreground thread's input
+        // (AttachThreadInput); after detaching, the app the link was clicked in can take the focus back.
+        HWND hwnd{nullptr};
+        ::EnumThreadWindows(::GetCurrentThreadId(), [](HWND h, LPARAM l) -> BOOL {
+            if(!::IsWindowVisible(h)) return TRUE;
+            *reinterpret_cast<HWND*>(l) = h;
+            return FALSE;
+        }, reinterpret_cast<LPARAM>(&hwnd));
+        if(hwnd && ::GetForegroundWindow() != hwnd) {
+            ::SetForegroundWindow(hwnd);
+        }
+#else
+        app->foreground();
+#endif
     }
 
     void picker_app::recalc() {
