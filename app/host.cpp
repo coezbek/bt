@@ -95,6 +95,19 @@ namespace bt::host {
          * @brief Picks up config.yml changes made outside this process (bt browser set default, hand edits).
          */
         void reload_if_changed() {
+            // scripts.lua may be edited in any editor; the old per-click process always read it fresh
+            static filesystem::file_time_type script_time = [] {
+                error_code ec;
+                return filesystem::last_write_time(g_script.get_path(), ec);
+            }();
+            error_code ec;
+            auto t = filesystem::last_write_time(g_script.get_path(), ec);
+            if(!ec && t != script_time) {
+                script_time = t;
+                g_script.reload();
+                g_pipeline.load();
+            }
+
             if(save_pending) return;   // our own unsaved change wins
             if(g_config.reload_if_changed(g_state)) {
                 g_pipeline.load();
