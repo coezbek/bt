@@ -8,6 +8,7 @@
 #include "app/url_opener.h"
 #include "cmdline.h"
 #include "app/discovery.h"
+#include "app/startup_trace.h"
 
 #if PLATFORM_WINDOWS
 #include <windows.h>
@@ -26,6 +27,7 @@ using namespace grey::common;
 using namespace bt;
 
 void open(click_payload cp, bool force_picker = false) {
+    bt::trace::mark("open");
     g_pipeline.process(cp);
 
     // decision whether to show picker or not
@@ -62,6 +64,7 @@ void open(click_payload cp, bool force_picker = false) {
                 limited_choices.push_back(match.profile);
             }
         }
+        bt::trace::mark("before_picker");
         ui::picker_app app{cp, limited_choices.empty() ? std::nullopt : std::make_optional(limited_choices)};
         const auto pr = app.run();
         if(pr) {
@@ -228,8 +231,11 @@ string parse_args(string arg) {
 #if PLATFORM_WINDOWS
 
 int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    bt::trace::mark("main");
     // ::MessageBox(NULL, pCmdLine, NULL, MB_OK);
     execute(parse_args(str::to_str(pCmdLine)));
+    bt::trace::mark("exit");
+    bt::trace::flush();
     return 0;
 }
 

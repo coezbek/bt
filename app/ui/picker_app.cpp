@@ -3,6 +3,7 @@
 #include "globals.h"
 #include <format>
 #include "btwidgets.h"
+#include "../startup_trace.h"
 #include "common/clipboard.h"
 #include "common/keyboard.h"
 
@@ -20,6 +21,7 @@ namespace bt::ui {
     picker_app::picker_app(const click_payload& cp, std::optional<std::vector<profile_selection> > selections)
         : cp{cp}, title{APP_LONG_NAME " - Pick"},
           app{app::make(title, {100, 120})} {
+        bt::trace::mark("app_made");
         app->fonts.load_icons = true;
         app->initial_theme_id = g_state.ui_theme;
         app->can_resize = false;
@@ -53,7 +55,9 @@ namespace bt::ui {
         app->on_initialised = [this]() {
             // Only the icons the picker can show. Decoding every browser's and profile's icon, hidden ones
             // included, cost ~30 ms on each start.
+            bt::trace::mark("init_start");
             btw_preload_icons(*app, choices);
+            bt::trace::mark("icons_done");
         };
     }
 
@@ -94,6 +98,12 @@ namespace bt::ui {
 
     bool picker_app::run_frame() {
         app->opacity = g_state.picker.opacity;
+
+        if(trace_frames < 3) {
+            ++trace_frames;
+            bt::trace::mark(trace_frames == 1 ? "frame1" : trace_frames == 2 ? "frame2_shown" : "frame3");
+            if(trace_frames == 3) bt::trace::flush();
+        }
 
         // The window is shown at the end of the first frame with ShowWindow only. Windows does not
         // activate it that way while the user still holds a key (e.g. Ctrl+click on a link), so the
