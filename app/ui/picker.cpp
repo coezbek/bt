@@ -338,6 +338,7 @@ namespace bt::ui {
         set_text(rule_value, host);
         ::SendMessageW(rule_loc, CB_SETCURSEL, 0, 0);
         ::SendMessageW(rule_scope, CB_SETCURSEL, host.empty() ? 0 : 1, 0);
+        ::EnableWindow(rule_scope, TRUE);
 
         place_controls();
         render();
