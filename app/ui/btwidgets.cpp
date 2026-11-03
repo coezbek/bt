@@ -6,6 +6,7 @@
 #include "common/stl.hpp"
 #include "common/str.h"
 #include "common/process.h"
+#include <set>
 
 using namespace std;
 using namespace grey;
@@ -33,6 +34,20 @@ namespace bt::ui {
             for(const browser_profile& profile : b.profiles) {
                 string profile_path = b.get_best_icon_path(profile);
                 app.preload_texture(profile_path, fss::get_full_path(profile_path));
+            }
+        }
+    }
+
+    void btw_preload_icons(grey::app& app, const std::vector<profile_selection>& choices) {
+        app.preload_texture("incognito", incognito_icon_png, incognito_icon_png_len);
+        app.preload_texture("res:black_hole", black_hole_png, black_hole_png_len);
+
+        std::set<string> loaded;
+        for(const profile_selection& c : choices) {
+            for(const string& path : {c.b().get_best_icon_path(), c.b().get_best_icon_path(c.p())}) {
+                if(loaded.insert(path).second) {
+                    app.preload_texture(path, fss::get_full_path(path));
+                }
             }
         }
     }

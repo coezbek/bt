@@ -2,12 +2,18 @@
 #include "grey.h"
 #include "model.h"
 #include "../browser.h"
+#include <vector>
 
 /**
  * @brief Extra Grey widgets, specific to Browser Tamer
  */
 namespace bt::ui {
     void btw_on_app_initialised(grey::app& app);
+
+    /**
+     * @brief Preloads only the icons needed to show the given choices.
+     */
+    void btw_preload_icons(grey::app& app, const std::vector<profile_selection>& choices);
 
     void btw_icon(grey::app& app,
         const profile_selection& selection,

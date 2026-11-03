@@ -49,7 +49,9 @@ namespace bt::ui {
         }
 
         app->on_initialised = [this]() {
-            btw_on_app_initialised(*app);
+            // Only the icons the picker can show. Decoding every browser's and profile's icon, hidden ones
+            // included, cost ~30 ms on each start.
+            btw_preload_icons(*app, choices);
         };
     }
 
