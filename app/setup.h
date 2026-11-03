@@ -47,9 +47,7 @@ namespace bt {
         static std::vector<system_check> get_checks();
 
     private:
-#if PLATFORM_WINDOWS
         static std::string get_shell_url_association_prog_id(const std::string& protocol_name);
 		static std::string get_prog_id_application_name(const std::string& prog_id);
-#endif
     };
 }

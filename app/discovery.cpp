@@ -13,16 +13,14 @@
 #include <fstream>
 #include <algorithm>
 
-#include "fonts/MaterialIcons.h"
+
 
 using namespace grey::common;
 using namespace grey;
 
-#if PLATFORM_WINDOWS
 #include "common/win32/shell.h"
 #include "common/win32/reg.h"
 using hive = win32::reg::hive;
-#endif
 
 using namespace std;
 
@@ -138,7 +136,6 @@ namespace bt {
         return nullopt;
     }
 
-#if PLATFORM_WINDOWS
     void discovery::discover_win32_registry_browsers(hive h, vector<browser>& browsers,
                                                      const string& ignore_proto_1, const string& ignore_proto_2) {
         auto subs = enum_subkeys(h, abs_root);
@@ -173,315 +170,18 @@ namespace bt {
             }
         }
     }
-#endif
 
-#if PLATFORM_LINUX
-    std::string discovery::resolve_xdg_icon_path(const std::string& icon) {
-        if(icon.empty()) {
-            return {};
-        }
 
-        // Absolute path — use directly
-        if(icon[0] == '/') {
-            std::error_code ec;
-            return fs::exists(icon, ec) ? icon : std::string{};
-        }
-
-        // Share dirs to search, in priority order
-        std::vector<fs::path> share_dirs;
-        if(const char* h = std::getenv("HOME")) {
-            share_dirs.emplace_back(fs::path(h) / ".local/share");
-            share_dirs.emplace_back(fs::path(h) / ".local/share/flatpak/exports/share");
-        }
-        if(const char* xdg = std::getenv("XDG_DATA_DIRS")) {
-            for(std::string_view sv = xdg; !sv.empty();) {
-                auto end = sv.find(':');
-                share_dirs.emplace_back(sv.substr(0, end));
-                sv.remove_prefix(end == sv.npos ? sv.size() : end + 1);
-            }
-        } else {
-            share_dirs.emplace_back("/usr/share");
-            share_dirs.emplace_back("/usr/local/share");
-        }
-        share_dirs.emplace_back("/var/lib/flatpak/exports/share");
-        share_dirs.emplace_back("/var/lib/snapd/desktop");
-
-        const char* exts[] = {".png", ".svg", ".xpm"};
-
-        for(const auto& share: share_dirs) {
-            // Enumerate all size dirs under hicolor, sorted largest-first
-            fs::path hicolor = share / "icons/hicolor";
-            std::error_code ec;
-
-            std::vector<std::pair<int, fs::path> > size_dirs; // {size, apps_path}
-            for(const auto& e: fs::directory_iterator(hicolor, ec)) {
-                if(!fs::is_directory(e.path(), ec)) continue;
-                std::string name = e.path().filename().string();
-                int size = 0;
-                if(name != "scalable") {
-                    auto x = name.find('x');
-                    if(x == std::string::npos) continue;
-                    try { size = std::stoi(name.substr(0, x)); } catch(...) { continue; }
-                }
-                size_dirs.emplace_back(size, e.path() / "apps");
-            }
-            std::sort(size_dirs.begin(), size_dirs.end(),
-                      [](const auto& a, const auto& b) { return a.first > b.first; });
-
-            for(const auto& [sz, apps]: size_dirs) {
-                for(const char* ext: exts) {
-                    fs::path p = apps / (icon + ext);
-                    if(fs::exists(p, ec)) {
-                        return p.string();
-                    }
-                }
-            }
-
-            // Fallback: pixmaps
-            for(const char* ext: exts) {
-                fs::path p = share / "pixmaps" / (icon + ext);
-                if(fs::exists(p, ec)) {
-                    return p.string();
-                }
-            }
-            // Some packages drop the file in pixmaps with no extension
-            {
-                fs::path p = share / "pixmaps" / icon;
-                if(fs::exists(p, ec)) {
-                    return p.string();
-                }
-            }
-        }
-
-        return {};
-    }
-
-    void discovery::discover_xdg_desktop_browsers(std::vector<browser>& browsers) {
-        const char* home = std::getenv("HOME");
-
-        fs::path dirs[] = {
-            home ? fs::path(home) / ".local/share/applications" : fs::path{},
-            "/usr/share/applications",
-            "/usr/local/share/applications",
-            "/var/lib/flatpak/exports/share/applications",
-            "/var/lib/snapd/desktop/applications",
-        };
-
-        std::unordered_set<std::string> seen_exec;
-
-        for(const auto& dir: dirs) {
-            std::error_code ec;
-            if(!fs::is_directory(dir, ec)) continue;
-
-            for(const auto& de: fs::directory_iterator(dir, ec)) {
-                if(de.path().extension() != ".desktop") continue;
-
-                std::string name, exec, categories, mimetypes, icon;
-
-                std::ifstream f(de.path());
-                bool in_entry = false;
-                std::string line;
-                while(std::getline(f, line)) {
-                    if(!line.empty() && line.back() == '\r')
-                        line.pop_back();
-
-                    if(line == "[Desktop Entry]") {
-                        in_entry = true;
-                        continue;
-                    }
-
-                    if(in_entry && line.size() && line[0] == '[')
-                        break; // next section
-
-                    if(!in_entry)
-                        continue;
-
-                    auto eq = line.find('=');
-                    if(eq == std::string::npos)
-                        continue;
-
-                    auto k = line.substr(0, eq);
-                    auto v = line.substr(eq + 1);
-
-                    if(k == "Name")
-                        name = v;
-                    else if(k == "Exec")
-                        exec = v;
-                    else if(k == "Categories")
-                        categories = v;
-                    else if(k == "MimeType")
-                        mimetypes = v;
-                    else if(k == "Icon")
-                        icon = v;
-                }
-
-                // filter: must be a browser
-                auto has_token = [](const std::string& s, std::string_view tok) {
-                    for(size_t p = 0; p <= s.size();) {
-                        auto e = s.find(';', p);
-                        if(e == std::string::npos) e = s.size();
-                        if(std::string_view(s).substr(p, e - p) == tok)
-                            return true;
-                        p = e + 1;
-                    }
-                    return false;
-                };
-
-                if(!has_token(categories, "WebBrowser") && !has_token(mimetypes, "x-scheme-handler/http"))
-                    continue;
-
-                if(exec.empty() || !seen_exec.emplace(exec).second)
-                    continue;
-
-                // strip field codes (%u, %U, %f, %F, %i, %c, %k, ...)
-                std::string cmd;
-                for(size_t i = 0; i < exec.size(); ++i) {
-                    if(exec[i] == '%' && i + 1 < exec.size()) {
-                        ++i;
-                        continue;
-                    }
-
-                    cmd += exec[i];
-                }
-
-                while(!cmd.empty() && cmd.back() == ' ') {
-                    cmd.pop_back();
-                }
-
-                if(name.ends_with(" Web Browser")) {
-                    name = name.substr(0, name.size() - 11);
-                }
-
-                // skip self
-                if(cmd == "bt" || cmd == "/usr/bin/bt") {
-                    continue;
-                }
-
-                // not sure what this is
-                if(cmd == "/usr/bin/false") {
-                    continue;
-                }
-
-                browser b{name, cmd};
-                b.icon_path = resolve_xdg_icon_path(icon);
-                fingerprint(cmd, b.engine, b.data_path);
-                browsers.push_back(b);
-            }
-        }
-    }
-#endif
-
-#if PLATFORM_MACOS
-    static void discover_macos_safari_browser(std::vector<browser>& browsers) {
-        const fs::path safari_paths[] = {
-            "/Applications/Safari.app/Contents/MacOS/Safari",
-            "/System/Applications/Safari.app/Contents/MacOS/Safari"
-        };
-
-        std::error_code ec;
-        fs::path safari_executable;
-        for(const auto& path: safari_paths) {
-            if(fs::is_regular_file(path, ec)) {
-                safari_executable = path;
-                break;
-            }
-        }
-
-        if(safari_executable.empty()) return;
-
-        const fs::path safari_bundle = safari_executable.parent_path().parent_path().parent_path();
-        if(safari_bundle.filename() != "Safari.app" || !fs::is_directory(safari_bundle, ec)) return;
-
-        browser safari{"Safari", "/usr/bin/open -a Safari"};
-        safari.icon_path = safari_bundle.string();
-        if(const char* home = std::getenv("HOME")) {
-            safari.data_path = (fs::path{home} / "Library/Containers/com.apple.Safari/Data/Library/Safari").string();
-        }
-
-        if(std::find(browsers.begin(), browsers.end(), safari) == browsers.end()) {
-            browsers.push_back(std::move(safari));
-        }
-    }
-
-    static void discover_macos_safari_profiles(browser& b) {
-        if(b.name != "Safari" || b.open_cmd != "/usr/bin/open -a Safari") return;
-
-        const string icon_path = b.icon_path;
-        std::unordered_set<string> profile_ids;
-        bool has_personal = false;
-
-        if(!b.data_path.empty()) {
-            fs::path db_path = fs::path{b.data_path} / "SafariTabs.db";
-            std::error_code ec;
-            if(fs::is_regular_file(db_path, ec)) {
-                sqlite3* db = nullptr;
-                const int rc = sqlite3_open_v2(db_path.string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr);
-                if(rc == SQLITE_OK && db != nullptr) {
-                    const auto rows = sql_execute(db,
-                                                  "select external_uuid, title from bookmarks "
-                                                  "where parent = 0 and type = 1 and subtype = 2");
-                    for(const auto& row: rows) {
-                        const auto id_it = row.find("external_uuid");
-                        const auto name_it = row.find("title");
-                        if(id_it == row.end() || name_it == row.end() || id_it->second.empty() || name_it->second.
-                           empty()) {
-                            continue;
-                        }
-                        if(id_it->second.find_first_not_of("0123456789abcdefABCDEF-") != string::npos) {
-                            continue;
-                        }
-                        if(!profile_ids.emplace(id_it->second).second) continue;
-
-                        const string name = name_it->second;
-                        if(name == "Personal") has_personal = true;
-
-                        browser_profile profile(
-                            name,
-                            format("\"{}\"", browser::URL_ARG_NAME),
-                            icon_path);
-                        profile.user_arg = format("--args -ProfileIdentifier \"{}\"", id_it->second);
-                        b.profiles.push_back(std::move(profile));
-                    }
-                }
-                if(db != nullptr) sqlite3_close(db);
-            }
-        }
-
-        if(!has_personal) {
-            browser_profile personal(
-                "Personal",
-                format("\"{}\"", browser::URL_ARG_NAME),
-                icon_path);
-            b.profiles.push_back(std::move(personal));
-        }
-
-        browser_profile private_profile(
-            "Private",
-            format("--args -PrivateBrowsing \"{}\"", browser::URL_ARG_NAME),
-            icon_path);
-        private_profile.is_incognito = true;
-        b.profiles.push_back(std::move(private_profile));
-    }
-#endif
 
 
     std::vector<browser> discovery::discover_browsers(const std::string& ignore_proto_1,
                                                       const std::string& ignore_proto_2) {
         vector<browser> browsers;
 
-#if PLATFORM_WINDOWS
         discover_win32_registry_browsers(hive::local_machine, browsers, ignore_proto_1, ignore_proto_2);
         discover_win32_registry_browsers(hive::current_user, browsers, ignore_proto_1, ignore_proto_2);
-#endif
 
-#if PLATFORM_LINUX
-        discover_xdg_desktop_browsers(browsers);
 
-#endif
-
-#if PLATFORM_MACOS
-        discover_macos_safari_browser(browsers);
-#endif
 
         // mark these as fully managed
         for(browser& b: browsers) {
@@ -513,11 +213,7 @@ namespace bt {
 
         // faster method to discover
         if(fs::exists(lsjf)) {
-#if PLATFORM_WINDOWS
             string jt = fss::read_all_text(str::to_str(lsjf));
-#else
-            string jt = fss::read_all_text(lsjf);
-#endif
             auto j = json::parse(jt);
             auto j_p_ic = j["profile"]["info_cache"];
             if(j_p_ic.is_object()) {
@@ -938,12 +634,6 @@ namespace bt {
     void discovery::discover_other_profiles(browser& b) {
         if(b.engine != browser_engine::generic) return;
 
-#if PLATFORM_MACOS
-        if(b.name == "Safari" && b.open_cmd == "/usr/bin/open -a Safari") {
-            discover_macos_safari_profiles(b);
-            return;
-        }
-#endif
 
         string icon_path = b.icon_path.empty() ? b.open_cmd : b.icon_path;
 
@@ -973,7 +663,6 @@ namespace bt {
         }
     }
 
-#if PLATFORM_WINDOWS
     bool discovery::fingerprint(const std::string& exe_path, browser_engine& engine, std::string& data_path) {
         engine = browser_engine::generic;
         data_path.clear();
@@ -1061,99 +750,6 @@ namespace bt {
 
         return false;
     }
-#elif PLATFORM_LINUX
-
-    fs::path get_numeric_subfolder(const fs::path& path) {
-        // list subfolders and return the first one that starts with a number
-        for(const auto& entry: fs::directory_iterator(path)) {
-            if(fs::is_directory(entry)) {
-                string name = entry.path().filename().string();
-                if(!name.empty() && std::isdigit(name[0]))
-                    return entry.path();
-            }
-        }
-        return {};
-    }
-
-    bool discovery::fingerprint(const std::string& exe_path, browser_engine& engine, std::string& data_path) {
-        engine = browser_engine::generic;
-        data_path.clear();
-        fs::path hd{fss::get_home_dir()};
-        fs::path cd{fss::get_config_dir()};
-
-        if(exe_path == "/usr/bin/firefox" || exe_path == "firefox") {
-            engine = browser_engine::gecko;
-            data_path = (cd / "mozilla" / "firefox").string();
-            return true;
-        }
-
-        if(exe_path == "/snap/bin/firefox") {
-            engine = browser_engine::gecko;
-            data_path = (hd / "snap" / "firefox" / "common" / ".mozilla" / "firefox").string();
-            return true;
-        }
-
-        if(exe_path == "/usr/bin/chromium") {
-            engine = browser_engine::chromium;
-            data_path = (cd / "chromium").string();
-            return true;
-        }
-
-        if(exe_path == "/snap/bin/chromium") {
-            engine = browser_engine::chromium;
-            data_path = (hd / "snap" / "chromium" / "common" / "chromium").string();
-            return true;
-        }
-
-        if(exe_path == "/usr/bin/brave-origin-stable") {
-            engine = browser_engine::chromium;
-            data_path = (cd / "BraveSoftware" / "Brave-Origin").string();
-            return true;
-        }
-
-        if(exe_path == "/usr/bin/brave-browser-stable") {
-            engine = browser_engine::chromium;
-            data_path = (cd / "BraveSoftware" / "Brave-Browser").string();
-            return true;
-        }
-
-        if(exe_path == "/snap/bin/brave") {
-            auto n = get_numeric_subfolder(hd / "snap" / "brave");
-            if(!n.empty()) {
-                engine = browser_engine::chromium;
-                data_path = (n / ".config" / "BraveSoftware" / "Brave-Browser").string();
-                return true;
-            }
-        }
-
-        if(exe_path == "/usr/bin/microsoft-edge-stable") {
-            engine = browser_engine::chromium;
-            data_path = (cd / "microsoft-edge").string();
-            return true;
-        }
-
-        if(exe_path == "/snap/bin/vivaldi.vivaldi-stable '--class=Vivaldi-snap'") {
-            auto n = get_numeric_subfolder(hd / "snap" / "vivaldi");
-            if(!n.empty()) {
-                engine = browser_engine::chromium;
-                data_path = (n / ".config" / "vivaldi").string();
-                return true;
-            }
-        }
-
-        if(exe_path == "/snap/bin/opera") {
-            auto n = get_numeric_subfolder(hd / "snap" / "opera");
-            if(!n.empty()) {
-                engine = browser_engine::chromium;
-                data_path = (n / ".config" / "opera").string();
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-#endif
 
     string get_settings_root() {
         return string("SOFTWARE\\") + APP_LONG_NAME;

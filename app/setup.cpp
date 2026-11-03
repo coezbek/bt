@@ -5,11 +5,9 @@
 #include "discovery.h"
 
 
-#if PLATFORM_WINDOWS
 #include "common/win32/reg.h"
 #include "common/win32/shell.h"
 using namespace grey::common::win32::reg;
-#endif
 
 using namespace std;
 using namespace grey::common;
@@ -17,7 +15,6 @@ using namespace grey::common;
 namespace bt {
     std::vector<system_check> setup::get_checks() {
 
-#if PLATFORM_WINDOWS
         return vector {
                 system_check{
                     "default_browser",
@@ -48,12 +45,8 @@ namespace bt {
                     }
                 }
         };
-#else
-        return vector<system_check>();
-#endif
     }
 
-#if PLATFORM_WINDOWS
     string setup::get_shell_url_association_prog_id(const string& protocol_name) {
         // There are 3 locations to check:
         // - HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoiceLatest\ProgId, value of ProdId
@@ -104,6 +97,5 @@ namespace bt {
         return app_name;
     }
 
-#endif
 
 }

@@ -4,10 +4,8 @@
 #include <vector>
 #include "common/platform.h"
 
-#if PLATFORM_WINDOWS
 // Windows discovery is nice - all the browsers register in the windows registry
 #include "common/win32/reg.h"
-#endif
 
 namespace bt {
     struct firefox_profile {
@@ -79,18 +77,11 @@ namespace bt {
          */
         static std::optional<browser> find_existing(const browser& b);
 
-#if PLATFORM_WINDOWS
 
         static void discover_win32_registry_browsers(grey::common::win32::reg::hive h,
                                                      std::vector<browser> &browsers,
                                                      const std::string &ignore_proto_1, const std::string& ignore_proto_2);
-#endif
 
-#if PLATFORM_LINUX
-        static std::string resolve_xdg_icon_path(const std::string &icon);
-
-        static void discover_xdg_desktop_browsers(std::vector<browser> &browsers);
-#endif
 
         /**
          * @brief Performs browser fingerprinting based on the executable path.

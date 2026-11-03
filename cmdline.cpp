@@ -5,20 +5,16 @@
 #include "common/platform.h"
 #include "magic_enum/magic_enum.hpp"
 
-#if PLATFORM_WINDOWS
 #include <Windows.h>
-#endif
 
 using namespace std;
 using namespace grey::common;
 
 cmdline::cmdline(){
-#if PLATFORM_WINDOWS
     // Attach to the parent process's console or create a new one
     if(!::AttachConsole(ATTACH_PARENT_PROCESS)) {
         AllocConsole();
     }
-#endif
 
     // Redirect standard input, output, and error streams to the console
     freopen("CONIN$", "r", stdin);

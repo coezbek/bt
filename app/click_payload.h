@@ -1,9 +1,7 @@
 #pragma once
 #include "common/str.h"
 #include <string>
-#if WIN32
 #include <Windows.h>
-#endif
 
 namespace bt {
     struct click_payload {
@@ -11,11 +9,7 @@ namespace bt {
 
         bool app_mode{false};
 
-#if WIN32
         HWND source_window_handle;  // handle of the system window where the click came from
-#else
-        void* source_window_handle;
-#endif
 
         // everything below is populated from source_window_handle
         std::string window_title;

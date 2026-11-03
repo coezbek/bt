@@ -8,20 +8,16 @@
 #include "common/stl.hpp"
 #include <ranges>
 
-#if PLATFORM_WINDOWS
 #include "common/win32/shell.h"
 #include "common/win32/os.h"
 #include "common/win32/user.h"
-#endif
 
 namespace fs = std::filesystem;
 using namespace std;
 using namespace grey::common;
 
 namespace bt {
-#if PLATFORM_WINDOWS
     const string lad = win32::shell::get_local_app_data_path();
-#endif
 
     browser::browser(
         const std::string& name,
@@ -73,19 +69,15 @@ namespace bt {
 
     void browser::launch_process(const std::string& cmdline, const browser_profile& profile) const {
 
-#if PLATFORM_WINDOWS
         // BT inherits the right to take foreground from the app the link was clicked in, but (unless the picker
         // is shown) never activates a window itself, so the right is not passed on to the process we start.
         // When the browser is already running, that process only hands the URL over to the running instance,
         // which then cannot come to the front and just flashes in the taskbar (#39).
         ::AllowSetForegroundWindow(ASFW_ANY);
-#endif
 
         process p = process::start(cmdline, false, profile.no_window);
         if(!p && !p.get_error().empty()) {
-#if PLATFORM_WINDOWS
             win32::user::message_box("Browser launch error", format("Command line: {}.\r\nError: {}", cmdline, p.get_error()));
-#endif
         }
     }
 
