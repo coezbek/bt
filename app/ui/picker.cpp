@@ -256,15 +256,14 @@ namespace bt::ui {
             static_cast<DWORD>(::GetWindowLongPtrW(wnd, GWL_EXSTYLE)), dpi);
         const int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
 
-        // Open at the click: the first tile centred horizontally on the mouse, the window just below
-        // it, or just above when there is no room below. rc.left/top are the (negative) frame offsets.
+        // Open at the click: the first tile centred on the mouse, shifted only as far as needed to stay
+        // on screen. rc.left/top are the (negative) frame offsets.
         POINT pt{};
         ::GetCursorPos(&pt);
         const int first_tile_cx = (w - min(n, per_row) * tile) / 2 + tile / 2;
-        const int gap = scale(8, dpi);
+        const int first_tile_cy = grid_y + tile / 2;
         int x = pt.x - first_tile_cx + rc.left;
-        int y = pt.y + gap;
-        if(y + wh > work.bottom) y = pt.y - gap - wh;
+        int y = pt.y - first_tile_cy + rc.top;
         x = clamp(x, static_cast<int>(work.left), max(static_cast<int>(work.left), static_cast<int>(work.right) - ww));
         y = clamp(y, static_cast<int>(work.top), max(static_cast<int>(work.top), static_cast<int>(work.bottom) - wh));
         target = {x, y, x + ww, y + wh};
