@@ -41,7 +41,10 @@ namespace bt {
         }
     }
 
-    rule_hit_log rule_hit_log::i;
+    rule_hit_log& rule_hit_log::instance() {
+        static rule_hit_log i;
+        return i;
+    }
 
     rule_hit_log::rule_hit_log() : 
         path{current_log_path()},

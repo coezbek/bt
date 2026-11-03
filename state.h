@@ -2,7 +2,8 @@
 #include <string>
 #include <vector>
 #include "model.h"
-#include "common/config.hpp"
+#include <filesystem>
+#include "common/yaml.hpp"
 #include "app/browser.h"
 
 namespace bt {
@@ -122,6 +123,11 @@ namespace bt {
         int highlight_width{4};
         bool rediscover_on_config_startup{true};
         bool discover_black_hole_browser{false};
+        // Start the resident process at Windows sign-in, so the first click is fast too.
+        bool run_at_startup{true};
+        bool show_tray_icon{true};
+        // Append click-to-picker timings to timing.log in the config folder.
+        bool log_timing{false};
         toast_state toast;
         picker_state picker;
         transforms_state transforms;
@@ -134,4 +140,27 @@ namespace bt {
     void from_node(const fkyaml::node& node, state& state);
 
     void to_node(fkyaml::node &node, const state &state);
+
+    /**
+     * @brief Loads and saves the state to config.yml.
+     *
+     * The resident process owns the state. It reloads the file when another process (the
+     * command line, or a hand edit) changed it, and saves after each change made in the UI.
+     */
+    class config_store {
+    public:
+        void load(state& s);
+        void save(const state& s);
+
+        /**
+         * @brief Reloads when the file on disk is newer than what we last read or wrote.
+         * @return true when the state was reloaded.
+         */
+        bool reload_if_changed(state& s);
+
+        [[nodiscard]] std::string get_path() const;
+
+    private:
+        std::filesystem::file_time_type last_write_time{};
+    };
 }

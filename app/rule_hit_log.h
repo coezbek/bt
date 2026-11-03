@@ -18,8 +18,10 @@ namespace bt {
 
         std::string get_absolute_path() { return path; }
 
-        // global instance
-        static rule_hit_log i;
+        /**
+         * @brief Global instance. Opens the log file on first use.
+         */
+        static rule_hit_log& instance();
 
     private:
         std::string path;

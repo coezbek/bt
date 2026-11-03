@@ -11,7 +11,6 @@ using namespace std;
 namespace bt {
 
     url_pipeline::url_pipeline(bt::state& cfg) : cfg{cfg} {
-        load();
     }
 
     void url_pipeline::clean(std::string& s) {

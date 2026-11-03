@@ -12,7 +12,13 @@
 namespace bt {
     class script_site {
     public:
+        /**
+         * @brief Empty site. Call open_file() before use.
+         */
+        script_site() = default;
         script_site(const std::string& path_or_code, bool is_path);
+
+        void open_file(const std::string& path);
         ~script_site();
 
         std::string print_buffer;
@@ -41,7 +47,7 @@ namespace bt {
         void handle_lua_print(const std::string& msg);
 
     private:
-        bool is_path;
+        bool is_path{false};
         std::string path_or_code;
         std::string code;
         std::string error;

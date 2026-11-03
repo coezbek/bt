@@ -1,4 +1,8 @@
 #include "state.h"
+#include <fstream>
+#include <system_error>
+#include "common/fss.h"
+#include "globals.h"
 
 using namespace std;
 using namespace grey::common;
@@ -9,6 +13,7 @@ namespace bt {
             {"enabled", state.enabled},
             {"visible_seconds", state.visible_seconds},
             {"border_width", state.border_width},
+            {"opacity", state.opacity},
             {"anim_duration", state.anim_duration},
         };
     }
@@ -17,6 +22,7 @@ namespace bt {
         read<bool>(node, "enabled", state.enabled);
         read<int>(node, "visible_seconds", state.visible_seconds);
         read<int>(node, "border_width", state.border_width);
+        read<float>(node, "opacity", state.opacity);
         read<float>(node, "anim_duration", state.anim_duration);
     }
 
@@ -132,6 +138,9 @@ namespace bt {
         read<int>(node, "highlight_width", state.highlight_width);
         read<bool>(node, "rediscover_on_config_startup", state.rediscover_on_config_startup);
         read<bool>(node, "discover_black_hole_browser", state.discover_black_hole_browser);
+        read<bool>(node, "run_at_startup", state.run_at_startup);
+        read<bool>(node, "show_tray_icon", state.show_tray_icon);
+        read<bool>(node, "log_timing", state.log_timing);
 
         read<toast_state>(node, "toast", state.toast);
         read<picker_state>(node, "picker", state.picker);
@@ -162,6 +171,9 @@ namespace bt {
         node["highlight_width"] = state.highlight_width;
         node["rediscover_on_config_startup"] = state.rediscover_on_config_startup;
         node["discover_black_hole_browser"] = state.discover_black_hole_browser;
+        node["run_at_startup"] = state.run_at_startup;
+        node["show_tray_icon"] = state.show_tray_icon;
+        node["log_timing"] = state.log_timing;
         node["toast"] = state.toast;
         node["picker"] = state.picker;
         node["transforms"] = state.transforms;
@@ -282,5 +294,51 @@ namespace bt {
         if(!state.icon_path.empty()) node["icon"] = state.icon_path;
         if(!state.data_path.empty()) node["data"] = state.data_path;
         node["profiles"] = state.profiles;
+    }
+
+    std::string config_store::get_path() const {
+        return (std::filesystem::path{fss::get_config_dir(CONFIG_NAME)} / "config.yml").string();
+    }
+
+    static std::filesystem::file_time_type write_time_of(const std::string& path) {
+        std::error_code ec;
+        auto t = std::filesystem::last_write_time(path, ec);
+        return ec ? std::filesystem::file_time_type{} : t;
+    }
+
+    void config_store::load(state& s) {
+        const string path = get_path();
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path{path}.parent_path(), ec);
+
+        fkyaml::node root = fkyaml::node::mapping();
+        if(std::ifstream ifs{path}; ifs) {
+            try {
+                root = fkyaml::node::deserialize(ifs);
+            } catch(const fkyaml::exception&) {
+                root = fkyaml::node::mapping();
+            }
+            if(root.get_type() != fkyaml::node_type::MAPPING) root = fkyaml::node::mapping();
+        }
+        s = state{};
+        from_node(root, s);
+        last_write_time = write_time_of(path);
+    }
+
+    void config_store::save(const state& s) {
+        const string path = get_path();
+        fkyaml::node root;
+        to_node(root, s);
+        {
+            std::ofstream ofs{path, std::ios::out | std::ios::trunc};
+            ofs << root;
+        }
+        last_write_time = write_time_of(path);
+    }
+
+    bool config_store::reload_if_changed(state& s) {
+        if(write_time_of(get_path()) == last_write_time) return false;
+        load(s);
+        return true;
     }
 }

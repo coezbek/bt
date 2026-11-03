@@ -11,6 +11,12 @@ namespace bt {
         reload();
     }
 
+    void script_site::open_file(const std::string& path) {
+        path_or_code = path;
+        is_path = true;
+        reload();
+    }
+
     script_site::~script_site() {
         if(L) {
             lua_close(L);

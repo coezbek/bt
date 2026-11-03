@@ -2,7 +2,6 @@
 #include "app/url_pipeline.h"
 #include "app/script_site.h"
 #include "state.h"
-#include "common/config.hpp"
 
 #define ProtoNameDev "BrowserTamerHTMDev"
 #define ProtoNameRelease "BrowserTamerHTM"
@@ -18,6 +17,18 @@
 #define CustomProtoName "x-bt"
 
 #define ArgSplitter "|"
+
+// Window class of the resident process. bt.exe finds it to forward a click.
+#if _DEBUG
+#define HOST_WINDOW_CLASS L"BrowserTamerDev.Host"
+#define HOST_MUTEX_NAME L"Local\\BrowserTamerDev.Host"
+#else
+#define HOST_WINDOW_CLASS L"BrowserTamer.Host"
+#define HOST_MUTEX_NAME L"Local\\BrowserTamer.Host"
+#endif
+
+// WM_COPYDATA tag for a serialized bt::request
+#define HOST_COPYDATA_ID 0x42540001
 
 #define PortableMarkerName ".portable"
 
@@ -55,4 +66,10 @@ extern bt::script_site g_script;
 
 extern bt::state g_state;
 
-extern grey::common::config<bt::state> g_config;
+extern bt::config_store g_config;
+
+/**
+ * @brief Loads config, Lua script and URL pipeline. Globals start empty so that a process which only
+ * forwards a click to the resident instance pays nothing for them.
+ */
+void bt_init_core();

@@ -17,8 +17,6 @@ using namespace std;
 using namespace grey::common;
 
 namespace bt {
-    const string lad = win32::shell::get_local_app_data_path();
-
     browser::browser(
         const std::string& name,
         const std::string& open_cmd)
