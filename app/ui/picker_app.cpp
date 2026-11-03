@@ -104,10 +104,14 @@ namespace bt::ui {
             } else {
                 point cur1 = w::cur_get();
 
-                if(w::div top{"top", {.auto_resize_y = true}}; top) {
-                    render_action_menu();
-                    render_rule_creator();
-                }
+                // A group, not an auto-resizing child: a child only knows its height one frame later, so the
+                // window was shown with a short header and then grew and jumped on the second frame.
+                ImGui::PushID("top");
+                ImGui::BeginGroup();
+                render_action_menu();
+                render_rule_creator();
+                ImGui::EndGroup();
+                ImGui::PopID();
 
                 point cur2 = w::cur_get();
                 header_height = cur2.y - cur1.y;
