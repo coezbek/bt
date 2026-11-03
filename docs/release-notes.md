@@ -1,3 +1,22 @@
+## 7.0.0
+
+Windows-only rework for speed. The picker now shows in about 30-70 ms after a click, down from several hundred.
+
+### How it works now
+- Browser Tamer runs in the background. It starts at Windows sign-in (option "Run at Windows sign-in") or on the first click. Each later click starts a tiny `bt.exe` that hands the link to the running instance and exits.
+- The running instance keeps config, Lua scripts, ClearURLs rules and icons loaded, and keeps the picker window ready, so nothing is loaded per click.
+- A tray icon opens the settings, rediscovers browsers, or exits. It can be turned off.
+- `bt.exe --exit` stops the background instance. `bt.exe --background` starts it without showing anything.
+
+### Changes
+- All UI is native Win32: picker, toast and settings. ImGui, DirectX and the `grey` UI library are gone; only grey's small non-UI helpers remain, in `common/`.
+- Settings window: browsers and profiles in a tree, rules in a list with an editor dialog, options in a dialog with General, Picker, Toast and Transforms tabs. Script editor, substitutions and pipeline debugger are separate windows.
+- The picker's settings button opens the Picker options instead of an in-picker panel.
+- Picker: a tile opens on a full click only, so a mouse release left over from the original click cannot pick a browser.
+- Firefox container colours are read correctly (they were all drawn white).
+- Linux and macOS builds are dropped on this branch.
+- Optional `timing.log` (option "Log click-to-picker time") and `BT_TRACE=1` environment variable for a step trace, both in the config folder.
+
 ## 6.3.4
 
 ### New features

@@ -7,6 +7,17 @@
 [![](https://www.aloneguid.uk/projects/bt/one.png)](https://www.aloneguid.uk/projects/bt/)
 
 
+## This fork: Win32 build
+
+This branch is a Windows-only rework built for speed. Browser Tamer stays resident in the background
+and shows a native Win32 picker in well under 80 ms after a click. See [release notes](release-notes.md#700).
+
+- `bt.exe` with a URL: route the link (forwarded to the background instance).
+- `bt.exe pick <url>`: always show the picker.
+- `bt.exe`: open settings.
+- `bt.exe --background`: start the background instance only; `bt.exe --exit`: stop it.
+- `bt.exe browser list | get default | set default <browser>.<profile>`: console commands.
+
 ## Raising an Issue
 
 Feel free to [raise an issue here](https://github.com/aloneguid/bt/issues/new).
