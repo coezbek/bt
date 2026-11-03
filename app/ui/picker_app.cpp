@@ -29,6 +29,9 @@ namespace bt::ui {
         app->always_on_top = g_state.picker.always_on_top;
 #if PLATFORM_WINDOWS
         app->win32_close_on_focus_lost = g_state.picker.close_on_focus_loss;
+        // Creating a GPU device loads the graphics driver into this short-lived process (~70-110 ms).
+        // The software rasterizer starts in ~15 ms and is plenty for a window this small.
+        app->win32_software_renderer = true;
 #endif
         auto cc = app->get_clear_color();
         ImU32 cc1 = rgb_colour{ImVec4(cc[0], cc[1], cc[2], cc[3])};
