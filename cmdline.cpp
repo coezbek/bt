@@ -112,6 +112,10 @@ int cmdline::exec_set_default(const std::string& data) {
                 if(p.name == profile_name) {
                     wcout << L"found profile: " << str::to_wstr(p.name) << endl;
                     bt::browser::set_default(g_state.browsers, p);
+                    if(!g_config.save(g_state)) {
+                        wcout << L"could not save: " << str::to_wstr(g_config.get_error()) << endl;
+                        return 1;
+                    }
                     wcout << L"default profile set and saved." << endl;
                     return 0;
                 }
