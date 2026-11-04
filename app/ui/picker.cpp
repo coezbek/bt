@@ -232,7 +232,7 @@ namespace bt::ui {
         pad = scale(8, dpi);
         btn_w = scale(30, dpi);
         header_h = scale(30, dpi);
-        footer_h = section_open ? scale(30, dpi) : font_height(ui_font(dpi, -1));
+        footer_h = section_open ? scale(30, dpi) : 0;
 
         box = scale(static_cast<int>(ps.box_size), dpi);
         margin = scale(static_cast<int>(ps.item_padding), dpi);
@@ -254,7 +254,7 @@ namespace bt::ui {
         rows = (n + per_row - 1) / per_row;
         grid_y = pad + header_h + pad / 2;
         footer_y = grid_y + tile * rows + pad / 2;
-        int h = footer_y + footer_h + pad;
+        int h = section_open ? footer_y + footer_h + pad : grid_y + tile * rows + pad;
         h = min(h, work_h);
         client = {w, h};
 
@@ -751,16 +751,6 @@ namespace bt::ui {
             ::DeleteObject(pen);
         }
         paint_tiles(hdc);
-
-        if(!section_open && !choices.empty()) {
-            RECT hint{pad, footer_y, w - pad, footer_y + footer_h};
-            ::SetBkMode(hdc, TRANSPARENT);
-            ::SetTextColor(hdc, pal.dim);
-            HGDIOBJ old_f = ::SelectObject(hdc, ui_font(dpi, -1));
-            ::DrawTextW(hdc, L"Hold Shift and click a profile to remember this host for it (or press R)", -1, &hint,
-                DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-            ::SelectObject(hdc, old_f);
-        }
 
         int bw = g_state.picker.border_width;
         if(bw > 0 && !g_state.picker.show_native_chrome) {
