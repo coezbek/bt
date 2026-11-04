@@ -130,6 +130,7 @@ namespace bt::ui::config_window {
             int scroll{0};
             int page_h{0};
             int built_width{0};
+            int nav_scroll{0};      // the navigation scrolls on its own when it is taller than the window
             bool sizing{false};     // inside a resize drag
             vector<RECT> cards, lines, fields, ro_fields;
             vector<text_item> texts;
@@ -1070,9 +1071,13 @@ namespace bt::ui::config_window {
         }
 
         int current_section() {
+            // At the end of the page the last sections cannot scroll to the top; then the last section
+            // whose heading is on screen counts as current.
+            const bool at_end = w.scroll >= w.page_h - view_height() - 2;
+            const int limit = at_end ? w.scroll + view_height() - S(80) : w.scroll + S(40);
             int idx = 0;
             for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
-                if(w.sections[i].y <= w.scroll + S(40)) idx = i;
+                if(w.sections[i].y <= limit && (!at_end || w.sections[i].profile < 0)) idx = i;
             }
             return idx;
         }
@@ -1089,7 +1094,7 @@ namespace bt::ui::config_window {
             vector<nav_item> items;
             const int cur = current_section();
             const int cur_browser = cur < static_cast<int>(w.sections.size()) ? w.sections[cur].browser : -1;
-            int y = nav_top();
+            int y = nav_top() - w.nav_scroll;
             for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
                 const auto& sec = w.sections[i];
                 if(sec.profile >= 0 && sec.browser != cur_browser) continue;
@@ -1098,6 +1103,40 @@ namespace bt::ui::config_window {
                 y += h;
             }
             return items;
+        }
+
+        int nav_view_bottom() {
+            RECT rc;
+            ::GetClientRect(w.wnd, &rc);
+            return rc.bottom - S(8);
+        }
+
+        void set_nav_scroll(int y) {
+            auto items = nav_items();
+            const int content = items.empty() ? 0 : static_cast<int>(items.back().r.bottom) + w.nav_scroll - nav_top();
+            const int visible = nav_view_bottom() - nav_top();
+            w.nav_scroll = clamp(y, 0, max(0, content - visible));
+            RECT nav{0, 0, nav_width(), 30000};
+            ::InvalidateRect(w.wnd, &nav, FALSE);
+        }
+
+        /**
+         * @brief Scrolls the navigation just enough to show the entry of the section in view.
+         */
+        void reveal_current_nav_item() {
+            const int cur = current_section();
+            for(const nav_item& it : nav_items()) {
+                if(it.section != cur) continue;
+                if(it.r.top < nav_top()) set_nav_scroll(w.nav_scroll - (nav_top() - it.r.top));
+                else if(it.r.bottom > nav_view_bottom()) set_nav_scroll(w.nav_scroll + (it.r.bottom - nav_view_bottom()));
+                return;
+            }
+        }
+
+        bool over_nav(LPARAM screen_pos) {
+            POINT pt{static_cast<short>(LOWORD(screen_pos)), static_cast<short>(HIWORD(screen_pos))};
+            ::ScreenToClient(w.wnd, &pt);
+            return pt.x >= 0 && pt.x < nav_width() && pt.y >= nav_top();
         }
 
         void set_scroll(int y) {
@@ -1112,6 +1151,7 @@ namespace bt::ui::config_window {
             ::SetScrollInfo(w.view, SB_VERT, &si, TRUE);
             RECT nav{0, 0, nav_width(), 30000};
             ::InvalidateRect(w.wnd, &nav, FALSE);
+            reveal_current_nav_item();
         }
 
         void scroll_to(const string& id) {
@@ -1149,7 +1189,9 @@ namespace bt::ui::config_window {
             RECT tr{S(60), S(22), nav_width() - S(8), S(58)};
             ::DrawTextW(hdc, wide(APP_LONG_NAME).c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-            // navigation
+            // navigation, clipped so scrolled entries never draw over the title
+            const int saved_dc = ::SaveDC(hdc);
+            ::IntersectClipRect(hdc, 0, nav_top(), nav_width(), rc.bottom);
             const int cur = current_section();
             for(const nav_item& it : nav_items()) {
                 const auto& sec = w.sections[it.section];
@@ -1206,6 +1248,8 @@ namespace bt::ui::config_window {
                 wstring title = wide(sec.title);
                 ::DrawTextW(hdc, title.c_str(), -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
+
+            ::RestoreDC(hdc, saved_dc);
 
             // caption buttons
             const bool zoomed = ::IsZoomed(w.wnd);
@@ -1322,12 +1366,16 @@ namespace bt::ui::config_window {
             return nullopt;
         }
 
-        optional<LRESULT> view_proc(HWND, UINT m, WPARAM wp, LPARAM) {
+        optional<LRESULT> view_proc(HWND, UINT m, WPARAM wp, LPARAM lp) {
             switch(m) {
                 case WM_ERASEBKGND:
                     return 1;
                 case WM_MOUSEWHEEL: {
                     const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+                    if(over_nav(lp)) {
+                        set_nav_scroll(w.nav_scroll - delta * S(72) / WHEEL_DELTA);
+                        return 0;
+                    }
                     set_scroll(w.scroll - delta * S(120) / WHEEL_DELTA);
                     return 0;
                 }
@@ -1443,10 +1491,12 @@ namespace bt::ui::config_window {
                         case cap_close: ::PostMessageW(hwnd, WM_CLOSE, 0, 0); return 0;
                         default: break;
                     }
-                    for(const nav_item& it : nav_items()) {
-                        if(::PtInRect(&it.r, pt)) {
-                            set_scroll(w.sections[it.section].y - S(12));
-                            break;
+                    if(pt.y >= nav_top()) {
+                        for(const nav_item& it : nav_items()) {
+                            if(::PtInRect(&it.r, pt)) {
+                                set_scroll(w.sections[it.section].y - S(12));
+                                break;
+                            }
                         }
                     }
                     return 0;
