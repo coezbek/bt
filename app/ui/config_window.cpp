@@ -877,16 +877,17 @@ namespace bt::ui::config_window {
         void build_about(builder& b) {
             b.section("about", "About");
             b.begin_card();
-            RECT c = b.row(format("{} {}", APP_LONG_NAME, APP_VERSION), "Native Win32, resident in the background, fast", S(32),
+            RECT c = b.row(format("{} {}", APP_LONG_NAME, APP_VERSION), "A vibe-coded fork of Browser Tamer", S(32),
                 icons::path_bitmap("logo", S(32), false));
             int right = c.right;
-            push_button(right, c.top, c.bottom, "Releases", [] { shell_open(APP_GITHUB_RELEASES_URL); });
+            push_button(right, c.top, c.bottom, "On GitHub", [] { shell_open(APP_FORK_URL); });
+            b.row("Vibe-coded with Claude", "Please report problems to the fork, not to Browser Tamer");
             RECT a = b.row("Based on Browser Tamer by Ivan G (aloneguid)",
-                APP_LONG_NAME " is a fork of Browser Tamer under the Apache 2.0 licence. Thank you, Ivan.");
+                "Apache 2.0 licence. Thank you, Ivan.");
             int ar = a.right;
             push_button(ar, a.top, a.bottom, "Donate", [] { shell_open(APP_DONATE_URL); });
             push_button(ar, a.top, a.bottom, "Browser Tamer", [] { shell_open(APP_UPSTREAM_URL); });
-            RECT d = b.row("Documentation", "The Browser Tamer manual covers rules, scripting and the command line");
+            RECT d = b.row("Documentation", "The Browser Tamer manual: rules, scripting, command line");
             int dr = d.right;
             push_button(dr, d.top, d.bottom, "Open", [] { shell_open(APP_DOCS_URL); });
             string timings = host::timing_summary();

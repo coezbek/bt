@@ -45,6 +45,7 @@
 // install, its config and its default-browser setting carry over.
 #define APP_REGISTERED_NAME "@PROJECT_NAME@"
 #define APP_UPSTREAM_URL "https://github.com/aloneguid/bt"
+#define APP_FORK_URL "https://github.com/coezbek/bt/tree/win32"
 
 #define CONFIG_NAME "@PROJECT_NAME@"
 
@@ -52,9 +53,9 @@
 
 #define APP_TEST_URL "https://www.aloneguid.uk/other/bt-test-page/"
 
-#define APP_GITHUB_URL "https://github.com/aloneguid/bt"
+#define APP_GITHUB_URL "https://github.com/coezbek/bt"
 
-#define APP_GITHUB_RELEASES_URL "https://github.com/aloneguid/bt/releases"
+#define APP_GITHUB_RELEASES_URL "https://github.com/coezbek/bt/releases"
 
 #define APP_DOCS_URL "https://www.aloneguid.uk/projects/bt/"
 

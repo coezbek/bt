@@ -1,12 +1,12 @@
 # Browser Torero
 
-A fork of [Browser Tamer](https://github.com/aloneguid/bt). Documentation for rules, scripting and the command line:
+A vibe-coded fork of [Browser Tamer](https://github.com/aloneguid/bt). Documentation for rules, scripting and the command line:
 [Browser Tamer manual](https://www.aloneguid.uk/projects/bt/).
 
 <img src="../resources/icons/icon128x128.png" width="64" align="right" alt="Browser Torero logo">
 
-Browser Torero is a fork of [Browser Tamer](https://github.com/aloneguid/bt) by Ivan G (@aloneguid), under the same
-Apache 2.0 licence. All the routing, rules, discovery and link cleanup come from Browser Tamer. The fork changes three things:
+Browser Torero is a vibe-coded fork of [Browser Tamer](https://github.com/aloneguid/bt) by Ivan G (aloneguid), under the same
+Apache 2.0 licence. Christopher Oezbek wrote it with an AI coding assistant (Claude); please report problems here, not upstream. All the routing, rules, discovery and link cleanup come from Browser Tamer. The fork changes three things:
 
 - **Native Win32.** Picker, toast and settings are plain Win32 windows. ImGui and DirectX are gone, and the build is Windows only.
 - **Much faster.** The picker opens in about 35 ms instead of 160-300 ms (time from launching `bt.exe` to the picker on screen, measured on the same machine). Browser Torero stays resident in the background and each click only hands the link over.
