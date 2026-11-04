@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#EF3B36"/>
+      <stop offset="1" stop-color="#B3121B"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="210" fill="url(#bg)"/>
+  <!-- horns -->
+  <path d="M 352 520 C 250 500 168 420 176 250 C 236 352 312 400 418 418 Z" fill="#FFFFFF"/>
+  <path d="M 672 520 C 774 500 856 420 848 250 C 788 352 712 400 606 418 Z" fill="#FFFFFF"/>
+  <!-- globe -->
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
+    <circle cx="512" cy="606" r="214" stroke-width="56"/>
+    <ellipse cx="512" cy="606" rx="92" ry="214" stroke-width="34"/>
+    <line x1="312" y1="606" x2="712" y2="606" stroke-width="34"/>
+  </g>
+</svg>
