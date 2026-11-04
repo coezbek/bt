@@ -79,7 +79,7 @@ namespace bt::ui {
          * validate() runs on OK and keeps the dialog open when it returns false.
          */
         bool form_dialog(HWND owner, const string& title, int w_dip, int h_dip,
-            function<void(form&, function<void()>)> build, function<bool()> validate = {}) {
+            function<void(form&, function<void()>)> build, function<bool(HWND dialog)> validate = {}) {
             UINT dpi = owner ? dpi_of(owner) : ::GetDpiForSystem();
             const int w = scale(w_dip, dpi), h = scale(h_dip, dpi);
             POINT pos = centred(owner, w, h);
@@ -117,7 +117,7 @@ namespace bt::ui {
                     }
                     if(m == WM_COMMAND) {
                         if(LOWORD(wp) == IDOK) {
-                            if(!validate || validate()) {
+                            if(!validate || validate(hwnd)) {
                                 ctx->ok = true;
                                 ::DestroyWindow(hwnd);
                             }
@@ -208,9 +208,9 @@ namespace bt::ui {
                 f.check(strings::RuleIsARegex, tmp->is_regex);
             }
             if(frameless) f.check("Open as an app window (no tabs or address bar)", tmp->app_mode);
-        }, [tmp, owner] {
+        }, [tmp](HWND dialog) {
             if(tmp->value.empty()) {
-                message_box(owner, "Rule", "The rule needs a value.", MB_OK | MB_ICONWARNING);
+                message_box(dialog, "Rule", "The rule needs a value.", MB_OK | MB_ICONWARNING);
                 return false;
             }
             return true;
@@ -254,7 +254,7 @@ namespace bt::ui {
                 f.label("Chromium: the \"User Data\" folder. Firefox: the folder holding profiles.ini.", true, 2);
             }
             if(!error->empty()) f.label(*error, false, 3);
-        }, [b, error, owner] {
+        }, [b, error](HWND dialog) {
             b->set_management(b->engine);
             string& e = *error;
             e.clear();
@@ -273,7 +273,7 @@ namespace bt::ui {
                 }
             }
             if(!e.empty()) {
-                message_box(owner, "Add custom browser", e, MB_OK | MB_ICONWARNING);
+                message_box(dialog, "Add custom browser", e, MB_OK | MB_ICONWARNING);
                 return false;
             }
             b->profiles.clear();
