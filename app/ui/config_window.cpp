@@ -273,7 +273,8 @@ namespace bt::ui::config_window {
             info.kind = ctl_kind::toggle;
             info.get = get;
             info.on = [get, set](int code) {
-                if(code == BN_CLICKED) set(!get());
+                // owner-drawn buttons report a fast second click as BN_DOUBLECLICKED
+                if(code == BN_CLICKED || code == BN_DOUBLECLICKED) set(!get());
             };
             HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
             return h;
@@ -300,7 +301,7 @@ namespace bt::ui::config_window {
             info.kind = ctl_kind::glyph_button;
             info.glyph = glyph;
             info.on = [click](int code) {
-                if(code == BN_CLICKED && click) click();
+                if((code == BN_CLICKED || code == BN_DOUBLECLICKED) && click) click();
             };
             HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
             ::EnableWindow(h, enabled);
@@ -584,7 +585,8 @@ namespace bt::ui::config_window {
                 toggle({right - S(96), c.top, right, c.bottom}, [&p] { return !p.is_hidden; }, [&p](bool v) {
                     p.is_hidden = !v;
                     changed();
-                    request_rebuild();
+                    if(!g_state.show_hidden_browsers) request_rebuild();
+                    else ::InvalidateRect(w.wnd, nullptr, FALSE);   // navigation icons
                 });
                 right -= S(104);
                 glyph_button(right, c.top, c.bottom, G_RIGHT, "Move right in the picker", [&br, pi] {
@@ -685,7 +687,7 @@ namespace bt::ui::config_window {
                 toggle({hr - S(96), hc.top, hr, hc.bottom}, [&br] { return !br.is_hidden; }, [&br](bool v) {
                     br.is_hidden = !v;
                     changed();
-                    request_rebuild();
+                    if(!g_state.show_hidden_browsers) request_rebuild();
                 });
                 hr -= S(104);
                 glyph_button(hr, hc.top, hc.bottom, G_DELETE, "Delete browser", [bi] {
@@ -952,8 +954,13 @@ namespace bt::ui::config_window {
             auto it = w.infos.find(static_cast<int>(di.CtlID));
             if(it == w.infos.end()) return;
             const control_info& info = it->second;
-            HDC hdc = di.hDC;
-            RECT rc = di.rcItem;
+            // draw into a buffer and copy once, so the control never shows a half-drawn state
+            const RECT target = di.rcItem;
+            const int bw = target.right - target.left, bh = target.bottom - target.top;
+            HDC hdc = ::CreateCompatibleDC(di.hDC);
+            HBITMAP buf = ::CreateCompatibleBitmap(di.hDC, bw, bh);
+            HGDIOBJ old_buf = ::SelectObject(hdc, buf);
+            RECT rc{0, 0, bw, bh};
             ::FillRect(hdc, &rc, brush(C_CARD));
             const bool disabled = di.itemState & ODS_DISABLED;
             const bool pressed = di.itemState & ODS_SELECTED;
@@ -1009,6 +1016,10 @@ namespace bt::ui::config_window {
                 ::InflateRect(&fr, -1, -1);
                 ::DrawFocusRect(hdc, &fr);
             }
+            ::BitBlt(di.hDC, target.left, target.top, bw, bh, hdc, 0, 0, SRCCOPY);
+            ::SelectObject(hdc, old_buf);
+            ::DeleteObject(buf);
+            ::DeleteDC(hdc);
         }
 
         // ---- caption, scrolling and navigation
