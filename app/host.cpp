@@ -445,7 +445,15 @@ namespace bt::host {
             discovery::discover_managed_profiles(nb);
             fresh.push_back(nb);
         }
-        g_state.browsers = browser::merge(fresh, g_state.browsers);
+        vector<browser> merged = browser::merge(fresh, g_state.browsers);
+        // usually nothing changed; then keep icons, config file and the settings page as they are.
+        // Compare what would be saved, not the objects, which also carry runtime-only fields.
+        auto saved_form = [](const vector<browser>& list) {
+            fkyaml::node n = list;
+            return fkyaml::node::serialize(n);
+        };
+        if(saved_form(merged) == saved_form(g_state.browsers)) return;
+        g_state.browsers = std::move(merged);
         ui::icons::clear();
         state_changed();
         save_now();

@@ -17,6 +17,7 @@ namespace Gdiplus { using std::min; using std::max; }
 #include "../setup.h"
 #include "../strings.h"
 #include "../url_opener.h"
+#include "../trace.h"
 #include "common/str.h"
 #include "common/fss.h"
 
@@ -63,6 +64,7 @@ namespace bt::ui::config_window {
         constexpr wchar_t G_CHECK[] = L"";
 
         constexpr UINT WM_APP_REBUILD = WM_APP + 20;
+        constexpr UINT WM_APP_REDISCOVER = WM_APP + 21;
 
         HBRUSH brush(COLORREF c) {
             static map<COLORREF, HBRUSH> cache;
@@ -1311,7 +1313,9 @@ namespace bt::ui::config_window {
             w.built_width = v.right - v.left;
             builder b{width};
             build_status(b);
+            trace("settings: status built");
             build_browsers(b);
+            trace(format("settings: browsers built ({} windows, {} painted)", w.controls.size(), w.painted.size()));
             build_picker(b);
             build_toast(b);
             build_cleanup(b);
@@ -1590,6 +1594,10 @@ namespace bt::ui::config_window {
                 case WM_APP_REBUILD:
                     rebuild();
                     return 0;
+                case WM_APP_REDISCOVER:
+                    host::rediscover();
+                    trace("settings: rediscovered");
+                    return 0;
                 case WM_ACTIVATE:
                     return nullopt;
                 case WM_DESTROY:
@@ -1619,7 +1627,7 @@ namespace bt::ui::config_window {
             return;
         }
 
-        if(g_state.rediscover_on_config_startup) host::rediscover();
+        trace("settings: open");
 
         UINT dpi{96};
         RECT work = cursor_work_area(&dpi);
@@ -1635,10 +1643,16 @@ namespace bt::ui::config_window {
         w.page = create_window(WS_EX_CONTROLPARENT, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, "", w.view, 0, 0, 10, 10, page_proc);
         ::SetWindowLongPtrW(w.view, GWL_EXSTYLE, ::GetWindowLongPtrW(w.view, GWL_EXSTYLE) | WS_EX_CONTROLPARENT);
 
+        trace("settings: window created");
         rebuild();
+        trace("settings: page built");
         if(!section.empty()) scroll_to(section);
         register_dialog(w.wnd);
         ::ShowWindow(w.wnd, SW_SHOW);
         ::SetForegroundWindow(w.wnd);
+        ::UpdateWindow(w.wnd);
+        trace("settings: shown");
+        // rediscover after the window is on screen; the page is rebuilt only if a browser changed
+        if(g_state.rediscover_on_config_startup) ::PostMessageW(w.wnd, WM_APP_REDISCOVER, 0, 0);
     }
 }
