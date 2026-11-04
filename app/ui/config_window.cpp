@@ -130,6 +130,7 @@ namespace bt::ui::config_window {
             int scroll{0};
             int page_h{0};
             int built_width{0};
+            bool sizing{false};     // inside a resize drag
             vector<RECT> cards, lines, fields, ro_fields;
             vector<text_item> texts;
             vector<glyph_item> glyphs;
@@ -1268,7 +1269,7 @@ namespace bt::ui::config_window {
         void layout() {
             RECT v = view_rect();
             ::MoveWindow(w.view, v.left, v.top, v.right - v.left, v.bottom - v.top, TRUE);
-            if(v.right - v.left != w.built_width) rebuild();
+            if(v.right - v.left != w.built_width && !w.sizing) rebuild();
             else set_scroll(w.scroll);
         }
 
@@ -1366,8 +1367,18 @@ namespace bt::ui::config_window {
                     return 0;
                 }
                 case WM_SIZE:
+                    // a minimised window has no client area; rebuilding for it loses the focus twice
+                    if(wp == SIZE_MINIMIZED) return 0;
                     if(w.view) layout();
                     ::InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                case WM_ENTERSIZEMOVE:
+                    w.sizing = true;
+                    return 0;
+                case WM_EXITSIZEMOVE:
+                    // rebuild once when the user lets go, not for every pixel of a drag
+                    w.sizing = false;
+                    if(w.view) layout();
                     return 0;
                 case WM_GETMINMAXINFO: {
                     auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);

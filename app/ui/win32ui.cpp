@@ -273,14 +273,13 @@ namespace bt::ui {
     }
 
     void add_tooltip(HWND tooltip, HWND owner, HWND control, const string& text) {
-        static deque<wstring> texts;   // tooltips keep a pointer to the text; deque never moves elements
-        texts.push_back(wide(text));
+        wstring w = wide(text);   // the tooltip copies the text
         TOOLINFOW ti{};
         ti.cbSize = sizeof(ti);
         ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
         ti.hwnd = owner;
         ti.uId = reinterpret_cast<UINT_PTR>(control);
-        ti.lpszText = texts.back().data();
+        ti.lpszText = w.data();
         ::SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
     }
 }
