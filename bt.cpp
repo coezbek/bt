@@ -125,14 +125,34 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if(r.kind == request_kind::exit) return 0;
 
     // No resident process yet. Two clicks can race here; the mutex makes one of them the host and the
-    // other waits for the host window and forwards to it.
+    // other waits for the host window and forwards to it. If the mutex's owner goes away without ever
+    // showing a window (it crashed, or is shutting down), the waiting launcher takes the mutex and
+    // becomes the host itself, so the click is not lost.
     HANDLE mutex = ::CreateMutexW(nullptr, TRUE, HOST_MUTEX_NAME);
-    if(::GetLastError() == ERROR_ALREADY_EXISTS) {
-        for(int i = 0; i < 100; i++) {
-            if(HWND h = find_host(); h && forward(h, r)) return 0;
-            ::Sleep(50);
+    if(mutex && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+        const ULONGLONG deadline = ::GetTickCount64() + 10000;
+        bool owned{false};
+        while(::GetTickCount64() < deadline) {
+            if(HWND h = find_host(); h && forward(h, r)) {
+                ::CloseHandle(mutex);
+                return 0;
+            }
+            const DWORD w = ::WaitForSingleObject(mutex, 100);
+            if(w == WAIT_OBJECT_0 || w == WAIT_ABANDONED) {
+                // the previous owner released it; a host may have appeared just before
+                if(HWND h = find_host(); h && forward(h, r)) {
+                    ::ReleaseMutex(mutex);
+                    ::CloseHandle(mutex);
+                    return 0;
+                }
+                owned = true;
+                break;
+            }
         }
-        return 1;
+        if(!owned) {
+            ::CloseHandle(mutex);
+            return 1;
+        }
     }
 
     int code = host::run(r);

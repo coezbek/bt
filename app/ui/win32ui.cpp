@@ -229,7 +229,14 @@ namespace bt::ui {
     void run_modal(HWND hwnd, HWND owner) {
         if(owner) ::EnableWindow(owner, FALSE);
         MSG msg;
-        while(::IsWindow(hwnd) && ::GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        while(::IsWindow(hwnd)) {
+            const BOOL r = ::GetMessageW(&msg, nullptr, 0, 0);
+            if(r <= 0) {
+                // the app is quitting: close the dialog and hand WM_QUIT on to the outer loop
+                if(r == 0) ::PostQuitMessage(static_cast<int>(msg.wParam));
+                if(::IsWindow(hwnd)) ::DestroyWindow(hwnd);
+                break;
+            }
             if(route_dialog_message(msg)) continue;
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
