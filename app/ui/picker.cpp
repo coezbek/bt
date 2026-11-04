@@ -187,7 +187,8 @@ namespace bt::ui {
     bool picker::apply_style() {
         const auto& ps = g_state.picker;
 
-        LONG_PTR style = WS_POPUP | WS_CLIPCHILDREN;
+        // keep WS_VISIBLE: the parked window must stay visible, or the next show takes the slow path
+        LONG_PTR style = WS_POPUP | WS_CLIPCHILDREN | (::GetWindowLongPtrW(wnd, GWL_STYLE) & WS_VISIBLE);
         if(ps.show_native_chrome) style |= WS_CAPTION | WS_SYSMENU;
         // WS_EX_TOOLWINDOW: the parked window is technically visible and must not get a taskbar button
         LONG_PTR ex = WS_EX_TOOLWINDOW;
@@ -196,7 +197,7 @@ namespace bt::ui {
         const auto alpha = static_cast<BYTE>(clamp(ps.opacity, 0.1f, 1.0f) * 255);
 
         bool frame_changed{false};
-        if(style != applied.style) {
+        if((style & ~WS_VISIBLE) != (applied.style & ~WS_VISIBLE)) {
             ::SetWindowLongPtrW(wnd, GWL_STYLE, style);
             applied.style = style;
             frame_changed = true;
