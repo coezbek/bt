@@ -88,6 +88,11 @@
             <RegistryValue Type="string" Value='"[#CM_FP_bt.exe]" "%1"' />
         </RegistryKey>
 
+        <!-- start in the background at sign-in; uninstall removes the value again -->
+        <RegistryKey Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run">
+            <RegistryValue Type="string" Name="Browser Torero" Value='"[#CM_FP_bt.exe]" --background' />
+        </RegistryKey>
+
         <!-- register application -->
         <RegistryKey Root="HKCU" Key="Software\RegisteredApplications">
             <RegistryValue Type="string" Name="Browser Tamer" Value="Software\Clients\StartMenuInternet\BrowserTamer\Capabilities" />
