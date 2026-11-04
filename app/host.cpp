@@ -366,8 +366,7 @@ namespace bt::host {
                 }
                 case ui::WM_APP_TRAY:
                     switch(LOWORD(l)) {
-                        case WM_CONTEXTMENU:
-                        case WM_RBUTTONUP:
+                        case WM_CONTEXTMENU:   // with NOTIFYICON_VERSION_4 this follows WM_RBUTTONUP; handle it once
                             show_tray_menu();
                             break;
                         case NIN_SELECT:
