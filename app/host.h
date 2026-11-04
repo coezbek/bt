@@ -30,9 +30,9 @@ namespace bt::host {
     void show_config();
 
     /**
-     * @brief Opens the settings dialog on a page: 0 general, 1 picker, 2 toast, 3 transforms.
+     * @brief Opens the settings window at a section, e.g. "picker" or "browsers".
      */
-    void show_settings(int page = 0);
+    void show_settings(const std::string& section);
 
     void quit();
 

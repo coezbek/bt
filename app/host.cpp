@@ -20,7 +20,6 @@
 #include "ui/picker.h"
 #include "ui/toast.h"
 #include "ui/config_window.h"
-#include "ui/settings_dialog.h"
 #include "trace.h"
 
 using namespace std;
@@ -390,8 +389,9 @@ namespace bt::host {
         ui::config_window::show();
     }
 
-    void show_settings(int page) {
-        ui::show_settings_dialog(ui::config_window::hwnd(), page);
+    void show_settings(const string& section) {
+        if(picker.visible()) picker.cancel();
+        ui::config_window::show(section);
     }
 
     void quit() {

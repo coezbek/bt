@@ -1,14 +1,17 @@
 #include "config_window.h"
+#include <map>
 #include <memory>
 #include <format>
+#include <functional>
 #include <filesystem>
 #include <commctrl.h>
 #include <commdlg.h>
+namespace Gdiplus { using std::min; using std::max; }
+#include <gdiplus.h>
 #include "form.h"
 #include "win32ui.h"
 #include "icons.h"
 #include "tools.h"
-#include "settings_dialog.h"
 #include "globals.h"
 #include "../host.h"
 #include "../setup.h"
@@ -16,8 +19,6 @@
 #include "../url_opener.h"
 #include "common/str.h"
 #include "common/fss.h"
-#include "common/stl.hpp"
-#include "magic_enum/magic_enum.hpp"
 
 using namespace std;
 using namespace grey::common;
@@ -25,285 +26,529 @@ using namespace grey::common;
 namespace bt::ui::config_window {
 
     namespace {
-        enum : int {
-            ID_TREE = 200, ID_ADD, ID_REDISCOVER, ID_UP, ID_DOWN, ID_SHOW_HIDDEN, ID_STATUS,
-            ID_RULES = 220, ID_RULE_ADD, ID_RULE_EDIT, ID_RULE_DEL, ID_RULE_UP, ID_RULE_DOWN, ID_RULE_CLEAR, ID_RULE_HELP,
-            ID_ICON = 240,
-            // menu
-            M_ADD_BROWSER = 300, M_OPEN_CONFIG_DIR, M_CLOSE, M_EXIT_APP,
-            M_DEFAULT_APPS, M_PIPELINE, M_SCRIPT, M_SUBS, M_REDISCOVER, M_BLACK_HOLE, M_HEALTH,
-            M_OPTIONS, M_PICKER_OPTIONS,
-            M_DOCS, M_RELEASES, M_ABOUT
+        // ---- look
+
+        constexpr COLORREF C_BG = RGB(243, 243, 243);
+        constexpr COLORREF C_CARD = RGB(255, 255, 255);
+        constexpr COLORREF C_CARD_BORDER = RGB(229, 229, 229);
+        constexpr COLORREF C_LINE = RGB(237, 237, 237);
+        constexpr COLORREF C_TEXT = RGB(26, 26, 26);
+        constexpr COLORREF C_DIM = RGB(96, 96, 96);
+        constexpr COLORREF C_ACCENT = RGB(0, 95, 184);
+        constexpr COLORREF C_FIELD = RGB(255, 255, 255);
+        constexpr COLORREF C_FIELD_RO = RGB(249, 249, 249);
+        constexpr COLORREF C_FIELD_BORDER = RGB(211, 211, 211);
+        constexpr COLORREF C_NAV_SEL = RGB(234, 234, 234);
+        constexpr COLORREF C_WARN = RGB(196, 43, 28);
+        constexpr COLORREF C_OK = RGB(15, 123, 15);
+
+        // Segoe Fluent Icons / MDL2
+        constexpr wchar_t G_GLOBE[] = L"";
+        constexpr wchar_t G_WINDOW[] = L"";
+        constexpr wchar_t G_CHIP[] = L"";
+        constexpr wchar_t G_CODE[] = L"";
+        constexpr wchar_t G_HOME[] = L"";
+        constexpr wchar_t G_FOLDER[] = L"";
+        constexpr wchar_t G_APP[] = L"";
+        constexpr wchar_t G_EDIT[] = L"";
+        constexpr wchar_t G_DELETE[] = L"";
+        constexpr wchar_t G_ADD[] = L"";
+        constexpr wchar_t G_UP[] = L"";
+        constexpr wchar_t G_DOWN[] = L"";
+        constexpr wchar_t G_LEFT[] = L"";
+        constexpr wchar_t G_RIGHT[] = L"";
+        constexpr wchar_t G_STAR[] = L"";
+        constexpr wchar_t G_STAR_FILLED[] = L"";
+        constexpr wchar_t G_WARN[] = L"";
+        constexpr wchar_t G_CHECK[] = L"";
+
+        constexpr UINT WM_APP_REBUILD = WM_APP + 20;
+
+        HBRUSH brush(COLORREF c) {
+            static map<COLORREF, HBRUSH> cache;
+            auto it = cache.find(c);
+            if(it == cache.end()) it = cache.emplace(c, ::CreateSolidBrush(c)).first;
+            return it->second;
+        }
+
+        Gdiplus::Color gp(COLORREF c) {
+            return {255, GetRValue(c), GetGValue(c), GetBValue(c)};
+        }
+
+        void rounded(Gdiplus::GraphicsPath& path, float x, float y, float w, float h, float r) {
+            float d = r * 2;
+            path.AddArc(x, y, d, d, 180, 90);
+            path.AddArc(x + w - d, y, d, d, 270, 90);
+            path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+            path.AddArc(x, y + h - d, d, d, 90, 90);
+            path.CloseFigure();
+        }
+
+        // ---- painted page content
+
+        struct text_item {
+            RECT r;
+            wstring s;
+            HFONT font;
+            COLORREF colour;
+            UINT flags;
         };
 
-        struct state_t {
-            HWND wnd{nullptr};
-            HWND tree{nullptr}, status{nullptr}, rules{nullptr}, icon{nullptr};
-            HWND btn_add{}, btn_rediscover{}, btn_up{}, btn_down{}, chk_hidden{};
-            vector<HWND> rule_buttons;
-            HIMAGELIST images{nullptr};
-            unique_ptr<form> f;
+        struct glyph_item {
+            RECT r;
+            wstring g;
+            COLORREF colour;
+            int size_pt;
+        };
+
+        struct bitmap_item {
+            int x, y;
+            HBITMAP bmp;
+        };
+
+        struct section_t {
+            string id;
+            string title;
+            int indent;
+            int y;
+        };
+
+        enum class ctl_kind { toggle, glyph_button, other };
+
+        struct control_info {
+            ctl_kind kind{ctl_kind::other};
+            function<bool()> get;           // toggles
+            wstring glyph;                  // glyph buttons
+            function<void(int code)> on;    // WM_COMMAND notification code
+        };
+
+        struct window_t {
+            HWND wnd{}, view{}, page{}, tooltip{};
             UINT dpi{96};
-            int sel_browser{0};
-            int sel_profile{0};
-            bool building_tree{false};
+            int scroll{0};
+            int page_h{0};
+            int built_width{0};
+            vector<RECT> cards, lines, fields, ro_fields;
+            vector<text_item> texts;
+            vector<glyph_item> glyphs;
+            vector<bitmap_item> bitmaps;
+            vector<section_t> sections;
+            vector<HWND> controls;
+            map<int, control_info> infos;
+            int next_id{1000};
             vector<system_check> health;
-        } s;
+        } w;
 
-        void rebuild_detail();
-        void rebuild_tree();
+        int S(int v) { return scale(v, w.dpi); }
 
-        void changed() {
-            host::state_changed();
+        void rebuild();
+        void request_rebuild() { ::PostMessageW(w.wnd, WM_APP_REBUILD, 0, 0); }
+
+        void changed() { host::state_changed(); }
+
+        // ---- page builder
+
+        /**
+         * @brief Places rows and cards top to bottom. Text is recorded for painting; controls are created
+         * on the page. Every row has a title and an optional description on the left and its control on the right.
+         */
+        class builder {
+        public:
+            builder(int width) : width{width} {
+                margin = S(28);
+                pad = S(18);
+                y = S(20);
+                control_w = min(S(320), (width - margin * 2) * 45 / 100);
+            }
+
+            int y;
+
+            void section(const string& id, const string& title, int indent = 0) {
+                if(!w.sections.empty() || y > S(20)) y += S(18);
+                w.sections.push_back({id, title, indent, y});
+                text(margin, y, width - margin * 2, S(34), title, ui_font(w.dpi, 6, true), C_TEXT);
+                y += S(42);
+            }
+
+            void subheading(const string& title) {
+                text(margin + S(4), y, width - margin * 2, S(24), title, ui_font(w.dpi, 1, true), C_TEXT);
+                y += S(28);
+            }
+
+            void begin_card() {
+                card_top = y;
+                first_row = true;
+            }
+
+            void end_card() {
+                w.cards.push_back({margin, card_top, width - margin, y});
+                y += S(10);
+            }
+
+            /**
+             * @brief A row; returns the rectangle reserved for the control at the right.
+             */
+            RECT row(const string& title, const string& desc = "", int lead_px = 0, HBITMAP lead = nullptr,
+                const wchar_t* lead_glyph = nullptr, bool bold = false, int extra_h = 0) {
+                const int h = (desc.empty() ? S(50) : S(64)) + extra_h;
+                if(!first_row) w.lines.push_back({margin + pad, y, width - margin - pad, y + 1});
+                first_row = false;
+
+                int x = margin + pad + indent;
+                if(lead) {
+                    w.bitmaps.push_back({x, y + (h - lead_px) / 2, lead});
+                    x += lead_px + S(12);
+                } else if(lead_glyph) {
+                    w.glyphs.push_back({{x, y, x + S(20), y + h}, lead_glyph, C_TEXT, 12});
+                    x += S(32);
+                }
+                const int text_right = width - margin - pad - control_w - S(12);
+                HFONT tf = ui_font(w.dpi, bold ? 1 : 0, bold);
+                if(desc.empty()) {
+                    text(x, y, text_right - x, h, title, tf, C_TEXT, DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                } else {
+                    const int th = S(20), dh = S(18);
+                    const int top = y + (h - th - dh) / 2;
+                    text(x, top, text_right - x, th, title, tf, C_TEXT, DT_SINGLELINE | DT_END_ELLIPSIS | DT_BOTTOM);
+                    text(x, top + th, text_right - x, dh, desc, ui_font(w.dpi, -1), C_DIM, DT_SINGLELINE | DT_END_ELLIPSIS | DT_TOP);
+                }
+                RECT c{width - margin - pad - control_w, y, width - margin - pad, y + h};
+                y += h;
+                return c;
+            }
+
+            /**
+             * @brief A row whose control takes most of the width (paths, arguments).
+             */
+            RECT wide_row(const string& title, int buttons_w = 0) {
+                const int h = S(50);
+                if(!first_row) w.lines.push_back({margin + pad, y, width - margin - pad, y + 1});
+                first_row = false;
+                const int x = margin + pad + indent;
+                const int label_w = S(150);
+                text(x, y, label_w, h, title, ui_font(w.dpi), C_TEXT, DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                RECT c{x + label_w, y, width - margin - pad - buttons_w, y + h};
+                y += h;
+                return c;
+            }
+
+            int indent{0};
+
+        private:
+            int width, margin, pad, control_w;
+            int card_top{0};
+            bool first_row{true};
+
+            static void text(int x, int y, int cw, int ch, const string& s, HFONT f, COLORREF c,
+                UINT flags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS) {
+                w.texts.push_back({{x, y, x + cw, y + ch}, wide(s), f, c, flags | DT_NOPREFIX});
+            }
+        };
+
+        // ---- controls on the page
+
+        HWND add_control(const wchar_t* cls, const string& text, DWORD style, RECT r, control_info info, DWORD ex = 0) {
+            int id = w.next_id++;
+            HWND h = child(w.page, cls, text, style, ex, id, w.dpi);
+            ::MoveWindow(h, r.left, r.top, r.right - r.left, r.bottom - r.top, FALSE);
+            w.controls.push_back(h);
+            w.infos[id] = std::move(info);
+            return h;
         }
 
-        browser* selected_browser() {
-            if(s.sel_browser < 0 || s.sel_browser >= static_cast<int>(g_state.browsers.size())) return nullptr;
-            return &g_state.browsers[s.sel_browser];
+        void tip(HWND control, const string& text) {
+            if(!text.empty()) add_tooltip(w.tooltip, w.page, control, text);
         }
 
-        browser_profile* selected_profile() {
-            browser* b = selected_browser();
-            if(!b || s.sel_profile < 0 || s.sel_profile >= static_cast<int>(b->profiles.size())) return nullptr;
-            return &b->profiles[s.sel_profile];
+        /**
+         * @brief A Windows 11 style on/off switch, right-aligned in the control area.
+         */
+        HWND toggle(RECT area, function<bool()> get, function<void(bool)> set) {
+            const int tw = S(96), th = S(28);
+            RECT r{area.right - tw, area.top + (area.bottom - area.top - th) / 2, area.right, 0};
+            r.bottom = r.top + th;
+            control_info info;
+            info.kind = ctl_kind::toggle;
+            info.get = get;
+            info.on = [get, set](int code) {
+                if(code == BN_CLICKED) set(!get());
+            };
+            HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
+            return h;
         }
 
-        // ---- status bar
+        HWND toggle(RECT area, bool& value, function<void()> after = changed) {
+            bool* v = &value;
+            return toggle(area, [v] { return *v; }, [v, after](bool b) {
+                *v = b;
+                if(after) after();
+            });
+        }
 
-        void refresh_status() {
-            if(!s.status) return;
-            s.health = setup::get_checks();
-            string health_text;
-            for(auto& c : s.health) {
+        /**
+         * @brief A small square button showing a glyph. Buttons are laid out right to left.
+         */
+        HWND glyph_button(int& right, int top, int bottom, const wchar_t* glyph, const string& tooltip,
+            function<void()> click, bool enabled = true) {
+            const int bw = S(32);
+            RECT r{right - bw, top + (bottom - top - bw) / 2, right, 0};
+            r.bottom = r.top + bw;
+            right -= bw + S(4);
+            control_info info;
+            info.kind = ctl_kind::glyph_button;
+            info.glyph = glyph;
+            info.on = [click](int code) {
+                if(code == BN_CLICKED && click) click();
+            };
+            HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
+            ::EnableWindow(h, enabled);
+            tip(h, tooltip);
+            return h;
+        }
+
+        int text_px(const string& s) {
+            HDC hdc = ::GetDC(nullptr);
+            HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
+            SIZE sz{};
+            wstring ws = wide(s);
+            ::GetTextExtentPoint32W(hdc, ws.c_str(), static_cast<int>(ws.size()), &sz);
+            ::SelectObject(hdc, old);
+            ::ReleaseDC(nullptr, hdc);
+            return sz.cx;
+        }
+
+        /**
+         * @brief A push button; laid out right to left like glyph buttons.
+         */
+        HWND push_button(int& right, int top, int bottom, const string& text, function<void()> click, bool enabled = true) {
+            const int bw = max(S(88), text_px(text) + S(28)), bh = S(32);
+            RECT r{right - bw, top + (bottom - top - bh) / 2, right, 0};
+            r.bottom = r.top + bh;
+            right -= bw + S(6);
+            control_info info;
+            info.on = [click](int code) {
+                if(code == BN_CLICKED && click) click();
+            };
+            HWND h = add_control(L"Button", text, BS_PUSHBUTTON | WS_TABSTOP, r, info);
+            ::EnableWindow(h, enabled);
+            return h;
+        }
+
+        /**
+         * @brief A text field: a painted rounded box with a borderless one-line edit centred inside.
+         */
+        HWND field(RECT area, string& value, bool read_only = false, function<void()> after = changed) {
+            const int bh = S(32);
+            RECT box{area.left, area.top + (area.bottom - area.top - bh) / 2, area.right, 0};
+            box.bottom = box.top + bh;
+            (read_only ? w.ro_fields : w.fields).push_back(box);
+            const int text_h = [] {
+                HDC hdc = ::GetDC(nullptr);
+                HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
+                TEXTMETRICW tm{};
+                ::GetTextMetricsW(hdc, &tm);
+                ::SelectObject(hdc, old);
+                ::ReleaseDC(nullptr, hdc);
+                return static_cast<int>(tm.tmHeight);
+            }();
+            RECT r{box.left + S(10), box.top + (bh - text_h) / 2, box.right - S(10), 0};
+            r.bottom = r.top + text_h;
+            string* v = &value;
+            auto handle = make_shared<HWND>();
+            control_info info;
+            info.on = [v, handle, after](int code) {
+                if(code != EN_CHANGE) return;
+                *v = get_text(*handle);
+                if(after) after();
+            };
+            *handle = add_control(L"Edit", value, ES_AUTOHSCROLL | WS_TABSTOP | (read_only ? ES_READONLY : 0), r, info);
+            return *handle;
+        }
+
+        template<typename T>
+        HWND number(RECT area, T& value, T lo, T hi) {
+            const int fw = S(110);
+            RECT r{area.right - fw, area.top, area.right, area.bottom};
+            string text = is_same_v<T, float> ? format("{:g}", static_cast<double>(value)) : to_string(value);
+            const int bh = S(32);
+            RECT box{r.left, r.top + (r.bottom - r.top - bh) / 2, r.right, 0};
+            box.bottom = box.top + bh;
+            w.fields.push_back(box);
+            HDC hdc = ::GetDC(nullptr);
+            HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
+            TEXTMETRICW tm{};
+            ::GetTextMetricsW(hdc, &tm);
+            ::SelectObject(hdc, old);
+            ::ReleaseDC(nullptr, hdc);
+            RECT er{box.left + S(10), box.top + (bh - tm.tmHeight) / 2, box.right - S(10), 0};
+            er.bottom = er.top + tm.tmHeight;
+            T* v = &value;
+            auto handle = make_shared<HWND>();
+            control_info info;
+            info.on = [v, lo, hi, handle](int code) {
+                if(code != EN_CHANGE) return;
+                try {
+                    double d = stod(get_text(*handle));
+                    if(d < lo || d > hi) return;
+                    *v = static_cast<T>(d);
+                    changed();
+                } catch(...) {
+                }
+            };
+            *handle = add_control(L"Edit", text, ES_AUTOHSCROLL | ES_RIGHT | WS_TABSTOP, er, info);
+            return *handle;
+        }
+
+        LRESULT CALLBACK combo_wheel(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+            // a closed combo box would change its value on the mouse wheel; scroll the page instead
+            if(m == WM_MOUSEWHEEL && !::SendMessageW(h, CB_GETDROPPEDSTATE, 0, 0)) {
+                return ::SendMessageW(w.view, m, wp, lp);
+            }
+            return ::DefSubclassProc(h, m, wp, lp);
+        }
+
+        HWND combo(RECT area, const vector<string>& items, function<int()> get, function<void(int)> set) {
+            const int ch = S(32);
+            RECT r{area.left, area.top + (area.bottom - area.top - ch) / 2, area.right, 0};
+            r.bottom = r.top + S(300);
+            auto handle = make_shared<HWND>();
+            control_info info;
+            info.on = [handle, set](int code) {
+                if(code == CBN_SELCHANGE) set(static_cast<int>(::SendMessageW(*handle, CB_GETCURSEL, 0, 0)));
+            };
+            HWND h = add_control(L"ComboBox", "", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, r, info);
+            *handle = h;
+            for(auto& s : items) ::SendMessageW(h, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide(s).c_str()));
+            ::SendMessageW(h, CB_SETCURSEL, get(), 0);
+            // keep the combo's own height, which centres its text, and centre it in the row
+            RECT wr{};
+            ::GetWindowRect(h, &wr);
+            const int closed_h = wr.bottom - wr.top;
+            ::MoveWindow(h, r.left, area.top + (area.bottom - area.top - closed_h) / 2, r.right - r.left, S(300), FALSE);
+            ::SetWindowSubclass(h, combo_wheel, 1, 0);
+            return h;
+        }
+
+        // ---- sections
+
+        void build_status(builder& b) {
+            b.section("status", "Status");
+            b.begin_card();
+            w.health = setup::get_checks();
+            bool ok = true;
+            for(auto& c : w.health) {
                 c.recheck();
-                if(!c.is_ok) health_text = "⚠ " + c.name + ": not set. Click here to fix.";
+                ok &= c.is_ok;
             }
-            if(health_text.empty()) health_text = "✓ Default browser";
-
+            RECT r = b.row("Default browser",
+                ok ? "Windows sends links to Browser Tamer." : "Windows does not send links to Browser Tamer yet.",
+                0, nullptr, ok ? G_CHECK : G_WARN);
+            w.glyphs.back().colour = ok ? C_OK : C_WARN;
+            if(!ok) {
+                int right = r.right;
+                push_button(right, r.top, r.bottom, "Fix...", [] {
+                    for(auto& c : w.health) if(!c.is_ok) c.fix();
+                });
+            }
             size_t profiles{0}, rules{0};
-            for(auto& b : g_state.browsers) {
-                profiles += b.profiles.size();
-                for(auto& p : b.profiles) rules += p.rules.size();
+            for(auto& br : g_state.browsers) {
+                profiles += br.profiles.size();
+                for(auto& p : br.profiles) rules += p.rules.size();
             }
-            string counts = format("{} browsers · {} profiles · {} rules", g_state.browsers.size(), profiles, rules);
             string def;
             if(auto sel = browser::get_default(g_state.browsers)) {
-                def = "Default: " + sel->b().name;
+                def = sel->b().name;
                 if(sel->b().engine != browser_engine::generic) def += " / " + sel->p().name;
             }
-
-            const int w1 = scale(330, s.dpi), w2 = scale(250, s.dpi);
-            int parts[] = {w1, w1 + w2, -1};
-            ::SendMessageW(s.status, SB_SETPARTS, 3, reinterpret_cast<LPARAM>(parts));
-            ::SendMessageW(s.status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(wide(health_text).c_str()));
-            ::SendMessageW(s.status, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(wide(counts).c_str()));
-            ::SendMessageW(s.status, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(wide(def).c_str()));
+            b.row(format("{} browsers, {} profiles, {} rules", g_state.browsers.size(), profiles, rules),
+                def.empty() ? "" : "Default profile: " + def);
+            b.end_card();
         }
 
-        // ---- tree
-
-        LPARAM tree_key(int b, int p) {
-            return (static_cast<LPARAM>(b) << 16) | static_cast<LPARAM>(p + 1);
-        }
-
-        HTREEITEM tree_insert(HTREEITEM parent, const string& text, int image, LPARAM key) {
-            wstring t = wide(text);
-            TVINSERTSTRUCTW ins{};
-            ins.hParent = parent;
-            ins.hInsertAfter = TVI_LAST;
-            ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-            ins.item.pszText = t.data();
-            ins.item.lParam = key;
-            ins.item.iImage = ins.item.iSelectedImage = image;
-            return reinterpret_cast<HTREEITEM>(::SendMessageW(s.tree, TVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&ins)));
-        }
-
-        void rebuild_tree() {
-            s.building_tree = true;
-            ::SendMessageW(s.tree, WM_SETREDRAW, FALSE, 0);
-            ::SendMessageW(s.tree, TVM_DELETEITEM, 0, reinterpret_cast<LPARAM>(TVI_ROOT));
-
-            const int px = scale(20, s.dpi);
-            if(s.images) ImageList_Destroy(s.images);
-            s.images = ImageList_Create(px, px, ILC_COLOR32, 16, 16);
-            ::SendMessageW(s.tree, TVM_SETIMAGELIST, TVSIL_NORMAL, reinterpret_cast<LPARAM>(s.images));
-            auto add_icon = [](HICON icon) {
-                int i = ImageList_AddIcon(s.images, icon);
-                ::DestroyIcon(icon);
-                return i;
-            };
-
-            HTREEITEM to_select{nullptr};
-            for(int bi = 0; bi < static_cast<int>(g_state.browsers.size()); bi++) {
-                const browser& b = g_state.browsers[bi];
-                if(b.is_hidden && !g_state.show_hidden_browsers) continue;
-
-                string label = b.name;
-                if(b.is_hidden) label += " (hidden)";
-                if(b.is_default()) label += "  ★";
-                int img = add_icon(icons::path_icon(b.get_best_icon_path(), px));
-                HTREEITEM bitem = tree_insert(TVI_ROOT, label, img, tree_key(bi, -1));
-                if(bi == s.sel_browser && (b.management == management_extent::none || s.sel_profile < 0)) to_select = bitem;
-
-                // a manually configured browser has one profile; it is edited on the browser node
-                if(b.management == management_extent::none) continue;
-
-                for(int pi = 0; pi < static_cast<int>(b.profiles.size()); pi++) {
-                    const browser_profile& p = b.profiles[pi];
-                    if(p.is_hidden && !g_state.show_hidden_browsers) continue;
-                    string pl = p.name;
-                    if(p.is_hidden) pl += " (hidden)";
-                    if(p.is_default) pl += "  ★";
-                    if(!p.rules.empty()) pl += format("  [{}]", p.rules.size());
-                    int pimg = add_icon(icons::profile_icon(b, p, px, icon_overlay_mode::profile_only));
-                    HTREEITEM pitem = tree_insert(bitem, pl, pimg, tree_key(bi, pi));
-                    if(bi == s.sel_browser && pi == s.sel_profile) to_select = pitem;
-                }
-                ::SendMessageW(s.tree, TVM_EXPAND, TVE_EXPAND, reinterpret_cast<LPARAM>(bitem));
+        const wchar_t* location_glyph(match_location loc) {
+            switch(loc) {
+                case match_location::url: return G_GLOBE;
+                case match_location::window_title: return G_WINDOW;
+                case match_location::process_name: return G_CHIP;
+                case match_location::lua_script: return G_CODE;
             }
-
-            ::SendMessageW(s.tree, WM_SETREDRAW, TRUE, 0);
-            s.building_tree = false;
-            if(!to_select) to_select = reinterpret_cast<HTREEITEM>(::SendMessageW(s.tree, TVM_GETNEXTITEM, TVGN_ROOT, 0));
-            if(to_select) ::SendMessageW(s.tree, TVM_SELECTITEM, TVGN_CARET, reinterpret_cast<LPARAM>(to_select));
-            else rebuild_detail();
+            return G_GLOBE;
         }
 
-        void on_tree_selection(LPARAM key) {
-            s.sel_browser = static_cast<int>(key >> 16);
-            int p = static_cast<int>(key & 0xFFFF) - 1;
-            if(p < 0) {
-                // browser node: edit its first profile below it
-                p = 0;
-                if(browser* b = selected_browser(); b && b->management != management_extent::none) p = -1;
+        string rule_description(const browser& br, const match_rule& r) {
+            string d;
+            switch(r.loc) {
+                case match_location::url:
+                    d = r.scope == match_scope::domain ? "Host name contains" : r.scope == match_scope::path ? "Path contains" : "URL contains";
+                    break;
+                case match_location::window_title: d = "Window title contains"; break;
+                case match_location::process_name: d = "Process name contains"; break;
+                case match_location::lua_script: d = "Lua function returns true"; break;
             }
-            s.sel_profile = p;
-            rebuild_detail();
+            if(r.is_regex) d = d.starts_with("Lua") ? d : d.substr(0, d.find(" contains")) + " matches regex";
+            if(r.app_mode && br.supports_frameless_windows()) d += " · opens as app window";
+            return d;
         }
 
-        // ---- rules list
-
-        void refresh_rules() {
-            ::SendMessageW(s.rules, LVM_DELETEALLITEMS, 0, 0);
-            browser_profile* p = selected_profile();
-            for(HWND h : s.rule_buttons) ::EnableWindow(h, p != nullptr);
-            ::EnableWindow(s.rules, p != nullptr);
-            if(!p) return;
-            static const char* where[] = {"URL", "Window title", "Process", "Lua"};
-            static const char* scope[] = {"anywhere", "host", "path"};
-            for(int i = 0; i < static_cast<int>(p->rules.size()); i++) {
-                const match_rule& r = p->rules[i];
-                vector<string> cells{
-                    where[static_cast<int>(r.loc)],
-                    r.value,
-                    r.loc == match_location::url ? scope[static_cast<int>(r.scope)] : "",
-                    r.is_regex ? "yes" : "",
-                    r.app_mode ? "yes" : ""};
-                for(int c = 0; c < static_cast<int>(cells.size()); c++) {
-                    wstring t = wide(cells[c]);
-                    LVITEMW it{};
-                    it.mask = LVIF_TEXT;
-                    it.iItem = i;
-                    it.iSubItem = c;
-                    it.pszText = t.data();
-                    ::SendMessageW(s.rules, c == 0 ? LVM_INSERTITEMW : LVM_SETITEMW, 0, reinterpret_cast<LPARAM>(&it));
+        void build_rules(builder& b, browser& br, browser_profile& p) {
+            for(size_t i = 0; i < p.rules.size(); i++) {
+                match_rule& r = p.rules[i];
+                RECT c = b.row(r.value, rule_description(br, r), 0, nullptr, location_glyph(r.loc));
+                // small badges after the value: scope and regex
+                const wchar_t* scope = r.loc == match_location::url && r.scope == match_scope::domain ? G_HOME
+                                     : r.loc == match_location::url && r.scope == match_scope::path ? G_FOLDER : nullptr;
+                int right = c.right;
+                const int n = static_cast<int>(p.rules.size());
+                glyph_button(right, c.top, c.bottom, G_DELETE, "Delete rule", [&p, i] {
+                    p.rules.erase(p.rules.begin() + static_cast<long>(i));
+                    changed();
+                    request_rebuild();
+                });
+                glyph_button(right, c.top, c.bottom, G_DOWN, "Move down", [&p, i] {
+                    swap(p.rules[i], p.rules[i + 1]);
+                    changed();
+                    request_rebuild();
+                }, static_cast<int>(i) + 1 < n);
+                glyph_button(right, c.top, c.bottom, G_UP, "Move up", [&p, i] {
+                    swap(p.rules[i], p.rules[i - 1]);
+                    changed();
+                    request_rebuild();
+                }, i > 0);
+                glyph_button(right, c.top, c.bottom, G_EDIT, "Edit rule", [&br, &p, i] {
+                    if(edit_rule(w.wnd, br, p.rules[i])) {
+                        changed();
+                        request_rebuild();
+                    }
+                });
+                // badges sit just left of the buttons
+                int bx = right - S(4);
+                auto badge = [&](const wchar_t* g, COLORREF col) {
+                    w.glyphs.push_back({{bx - S(22), c.top, bx, c.bottom}, g, col, 10});
+                    bx -= S(26);
+                };
+                if(r.app_mode && br.supports_frameless_windows()) badge(G_APP, C_DIM);
+                if(scope) badge(scope, C_DIM);
+                if(r.is_regex) {
+                    w.texts.push_back({{bx - S(22), c.top, bx, c.bottom}, L".*", ui_font(w.dpi, 1, true), C_DIM,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE});
                 }
             }
-        }
-
-        int selected_rule() {
-            return static_cast<int>(::SendMessageW(s.rules, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_SELECTED));
-        }
-
-        void select_rule(int i) {
-            LVITEMW it{};
-            it.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-            it.state = LVIS_SELECTED | LVIS_FOCUSED;
-            ::SendMessageW(s.rules, LVM_SETITEMSTATE, i, reinterpret_cast<LPARAM>(&it));
-        }
-
-        void rules_changed(int select = -1) {
-            changed();
-            refresh_rules();
-            if(select >= 0) select_rule(select);
-            refresh_status();
-        }
-
-        void on_rule_command(int id) {
-            browser* b = selected_browser();
-            browser_profile* p = selected_profile();
-            if(!b || !p) return;
-            int i = selected_rule();
-            const int n = static_cast<int>(p->rules.size());
-            switch(id) {
-                case ID_RULE_ADD: {
-                    match_rule r;
-                    if(edit_rule(s.wnd, *b, r)) {
-                        p->rules.push_back(r);
-                        rules_changed(static_cast<int>(p->rules.size()) - 1);
-                    }
-                    break;
+            RECT c = b.row(p.rules.empty() ? "No rules yet" : "", p.rules.empty() ? "Links that match a rule open here without the picker." : "");
+            int right = c.right;
+            push_button(right, c.top, c.bottom, "Add rule...", [&br, &p] {
+                match_rule r;
+                if(edit_rule(w.wnd, br, r)) {
+                    p.rules.push_back(r);
+                    changed();
+                    request_rebuild();
                 }
-                case ID_RULE_EDIT:
-                    if(i >= 0 && i < n && edit_rule(s.wnd, *b, p->rules[i])) rules_changed(i);
-                    break;
-                case ID_RULE_DEL:
-                    if(i >= 0 && i < n) {
-                        p->rules.erase(p->rules.begin() + i);
-                        rules_changed(min(i, n - 2));
-                    }
-                    break;
-                case ID_RULE_UP:
-                    if(i > 0 && i < n) {
-                        swap(p->rules[i], p->rules[i - 1]);
-                        rules_changed(i - 1);
-                    }
-                    break;
-                case ID_RULE_DOWN:
-                    if(i >= 0 && i < n - 1) {
-                        swap(p->rules[i], p->rules[i + 1]);
-                        rules_changed(i + 1);
-                    }
-                    break;
-                case ID_RULE_CLEAR:
-                    if(n > 0 && ::MessageBoxW(s.wnd, L"Delete all rules of this profile?", L"Rules", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                        p->rules.clear();
-                        rules_changed();
-                    }
-                    break;
-                case ID_RULE_HELP:
-                    shell_open(string{APP_HELP_BASE_URL} + "#rules");
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        // ---- detail panel (right side)
-
-        int left_width() { return scale(280, s.dpi); }
-
-        void layout_rules(int top) {
-            RECT rc;
-            ::GetClientRect(s.wnd, &rc);
-            RECT sb;
-            ::GetWindowRect(s.status, &sb);
-            const int status_h = sb.bottom - sb.top;
-            const int m = scale(10, s.dpi), x = left_width() + m * 2, bh = scale(26, s.dpi);
-            int bx = x;
-            for(HWND h : s.rule_buttons) {
-                int w = scale(h == s.rule_buttons.back() ? 60 : 76, s.dpi);
-                ::MoveWindow(h, bx, top, w, bh, TRUE);
-                bx += w + scale(4, s.dpi);
-            }
-            int ly = top + bh + scale(6, s.dpi);
-            ::MoveWindow(s.rules, x, ly, rc.right - x - m, max<int>(scale(60, s.dpi), rc.bottom - status_h - ly - m), TRUE);
+            });
         }
 
         void pick_colour(browser_profile& p) {
             static COLORREF custom[16]{};
             CHOOSECOLORW cc{sizeof(cc)};
-            cc.hwndOwner = s.wnd;
+            cc.hwndOwner = w.wnd;
             cc.rgbResult = RGB(p.user_color.r8(), p.user_color.g8(), p.user_color.b8());
             cc.lpCustColors = custom;
             cc.Flags = CC_RGBINIT | CC_FULLOPEN;
@@ -312,414 +557,729 @@ namespace bt::ui::config_window {
                 p.use_user_color = true;
                 icons::clear();
                 changed();
-                rebuild_tree();
+                request_rebuild();
             }
         }
 
-        void rebuild_detail() {
-            RECT rc;
-            ::GetClientRect(s.wnd, &rc);
-            const int m = scale(10, s.dpi);
-            const int x = left_width() + m * 2;
-            const int w = rc.right - x - m;
-            form& f = *s.f;
-            ::SendMessageW(s.wnd, WM_SETREDRAW, FALSE, 0);
-            f.begin(x, m, w, scale(110, s.dpi), s.dpi);
-            ::ShowWindow(s.icon, SW_HIDE);
+        void build_profile(builder& b, browser& br, int pi) {
+            browser_profile& p = br.profiles[pi];
+            const bool managed = br.management != management_extent::none;
+            const int n = static_cast<int>(br.profiles.size());
 
-            browser* bp = selected_browser();
-            if(!bp) {
-                if(g_state.browsers.empty()) {
-                    f.section("No browsers yet");
-                    f.label("Scan the system for installed browsers, or add one by hand.", true);
-                    f.button("Discover browsers", [] { host::rediscover(); });
-                }
-                ::ShowWindow(s.rules, SW_HIDE);
-                for(HWND h : s.rule_buttons) ::ShowWindow(h, SW_HIDE);
-                ::SendMessageW(s.wnd, WM_SETREDRAW, TRUE, 0);
-                ::RedrawWindow(s.wnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
-                return;
-            }
-            browser& b = *bp;
-            const bool full = b.management == management_extent::full;
+            string desc;
+            if(p.is_default) desc = "Default";
+            if(p.is_incognito) desc += string{desc.empty() ? "" : " · "} + "Private";
+            desc += string{desc.empty() ? "" : " · "} + format("{} {}", p.rules.size(), p.rules.size() == 1 ? "rule" : "rules");
+            if(p.is_hidden) desc += " · hidden in picker";
 
-            // browser
-            f.section(b.name);
-            if(!full) f.text("Name", b.name, false, [] { changed(); });
-            if(!b.is_internal()) {
-                f.text("Command", b.open_cmd, full, changed, 70);
-                f.button("Folder", [&b] { shell_open(filesystem::path{b.open_cmd}.parent_path().string()); }, true, scale(64, s.dpi));
-                if(!b.data_path.empty()) {
-                    f.text("Data folder", b.data_path, full, changed, 70);
-                    f.button("Open", [&b] { shell_open(b.data_path); }, true, scale(64, s.dpi));
-                }
-            }
-            string engine = b.engine == browser_engine::chromium ? strings::ChromiumBased
-                          : b.engine == browser_engine::gecko ? strings::GeckoBased : "Generic";
-            string managed = b.management == management_extent::full ? "found by discovery"
-                           : b.management == management_extent::profiles ? "added by hand, profiles discovered" : "added by hand";
-            f.label(format("{} · {} · {} profile(s)", engine, managed, b.profiles.size()), true);
-            f.check("Show in picker", [&b] { return !b.is_hidden; }, [&b](bool v) {
-                b.is_hidden = !v;
-                changed();
-                rebuild_tree();
-            });
-            if(b.engine == browser_engine::gecko) {
-                f.check("Discover legacy profiles", b.discover_classic_gecko_profiles, changed);
-                f.check("Discover containers", b.discover_containers, changed);
-                f.button("Profile manager", [&b] { shell_open(b.open_cmd, "-P"); });
-                f.button("about:profiles", [&b] { shell_open(b.open_cmd, "about:profiles"); }, true);
-                f.button("Delete browser", [] {
-                    if(::MessageBoxW(s.wnd, L"Delete this browser and all its rules?", L"Delete", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-                    g_state.browsers.erase(g_state.browsers.begin() + s.sel_browser);
-                    s.sel_browser = max(0, s.sel_browser - 1);
-                    s.sel_profile = 0;
+            const int icon_px = S(32);
+            RECT c = b.row(managed ? p.name : "Launch", desc, icon_px,
+                icons::profile_bitmap(br, p, icon_px, icon_overlay_mode::profile_only), nullptr, true);
+            int right = c.right;
+            if(managed) {
+                toggle({right - S(96), c.top, right, c.bottom}, [&p] { return !p.is_hidden; }, [&p](bool v) {
+                    p.is_hidden = !v;
                     changed();
-                    rebuild_tree();
-                    refresh_status();
-                }, true);
-            } else {
-                f.button("Delete browser", [] {
-                    if(::MessageBoxW(s.wnd, L"Delete this browser and all its rules?", L"Delete", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-                    g_state.browsers.erase(g_state.browsers.begin() + s.sel_browser);
-                    s.sel_browser = max(0, s.sel_browser - 1);
-                    s.sel_profile = 0;
-                    changed();
-                    rebuild_tree();
-                    refresh_status();
+                    request_rebuild();
                 });
+                right -= S(104);
+                glyph_button(right, c.top, c.bottom, G_RIGHT, "Move right in the picker", [&br, pi] {
+                    swap(br.profiles[pi], br.profiles[pi + 1]);
+                    changed();
+                    request_rebuild();
+                }, pi + 1 < n);
+                glyph_button(right, c.top, c.bottom, G_LEFT, "Move left in the picker", [&br, pi] {
+                    swap(br.profiles[pi], br.profiles[pi - 1]);
+                    changed();
+                    request_rebuild();
+                }, pi > 0);
             }
-
-            // profile
-            browser_profile* pp = selected_profile();
-            if(pp) {
-                browser_profile& p = *pp;
-                const int idx = s.sel_profile;
-                f.section(b.management == management_extent::none ? "Launch" : format("Profile: {}{}", p.name, p.is_incognito ? " (private)" : ""));
-
-                if(!b.is_internal()) {
-                    const int icon_box = scale(48, s.dpi);
-                    RECT ir = f.area(icon_box);
-                    ::MoveWindow(s.icon, ir.left, ir.top, icon_box, icon_box, FALSE);
-                    ::ShowWindow(s.icon, SW_SHOWNA);
-                    ::InvalidateRect(s.icon, nullptr, TRUE);
-                    f.button("Change icon...", [&p] {
-                        string path = open_file_dialog(s.wnd, L"Profile icon", {{L"Images", L"*.png;*.ico;*.jpg;*.bmp;*.exe"}});
-                        if(path.empty()) return;
-                        p.user_icon_path = path;
-                        icons::clear();
-                        changed();
-                        rebuild_tree();
-                    });
-                    f.button("Reset icon", [&p] {
-                        p.user_icon_path.clear();
-                        icons::clear();
-                        changed();
-                        rebuild_tree();
-                    }, true, 0, !p.user_icon_path.empty());
-
-                    if(b.management == management_extent::none) {
-                        f.text("Arguments", p.launch_arg, false, changed);
-                        f.check("Hide the program's window", p.no_window, changed);
-                    } else {
-                        f.text("Arguments", p.launch_arg, true);
-                        f.text("Extra arguments", p.user_arg, false, changed);
-                    }
-                }
-
-                if(b.management != management_extent::none) {
-                    f.check("Show in picker", [&p] { return !p.is_hidden; }, [&p](bool v) {
-                        p.is_hidden = !v;
-                        changed();
-                        rebuild_tree();
-                    });
-                }
-
-                f.button(p.is_default ? "Default ★" : "Make default", [&p] {
+            glyph_button(right, c.top, c.bottom, p.is_default ? G_STAR_FILLED : G_STAR,
+                p.is_default ? "Default profile" : "Make default", [&p] {
                     browser::set_default(g_state.browsers, p);
                     changed();
-                    rebuild_tree();
-                    refresh_status();
-                }, false, 0, !p.is_default);
-                f.button("Test link", [&b, idx] { url_opener::open(profile_selection(b, idx), APP_TEST_URL); }, true);
-                if(b.supports_frameless_windows()) {
-                    f.button("Test as app", [&b, idx] {
-                        click_payload up{APP_TEST_URL};
-                        up.app_mode = true;
-                        url_opener::open(profile_selection(b, idx), up);
-                    }, true);
+                    request_rebuild();
+                }, !p.is_default);
+            glyph_button(right, c.top, c.bottom, G_APP, "Open a test link", [&br, pi] {
+                url_opener::open(profile_selection(br, pi), APP_TEST_URL);
+            });
+
+            b.indent = S(44);
+            if(!br.is_internal()) {
+                if(managed) {
+                    field(b.wide_row("Arguments"), p.launch_arg, true);
+                    field(b.wide_row("Extra arguments"), p.user_arg);
+                } else {
+                    field(b.wide_row("Arguments"), p.launch_arg);
+                    toggle(b.row("Hide the program's window"), p.no_window);
                 }
-                if(b.management != management_extent::none) {
-                    f.button("◀", [&b, idx] {
-                        if(idx <= 0) return;
-                        swap(b.profiles[idx], b.profiles[idx - 1]);
-                        s.sel_profile = idx - 1;
-                        changed();
-                        rebuild_tree();
-                    }, true, scale(32, s.dpi), idx > 0);
-                    f.button("▶", [&b, idx] {
-                        if(idx + 1 >= static_cast<int>(b.profiles.size())) return;
-                        swap(b.profiles[idx], b.profiles[idx + 1]);
-                        s.sel_profile = idx + 1;
-                        changed();
-                        rebuild_tree();
-                    }, true, scale(32, s.dpi), idx + 1 < static_cast<int>(b.profiles.size()));
-                }
-                f.check("Custom highlight colour", p.use_user_color, [] {
+                RECT ic = b.row("Icon", p.user_icon_path.empty() ? "Built-in" : p.user_icon_path);
+                int ir = ic.right;
+                push_button(ir, ic.top, ic.bottom, "Reset", [&p] {
+                    p.user_icon_path.clear();
                     icons::clear();
                     changed();
-                    rebuild_tree();
+                    request_rebuild();
+                }, !p.user_icon_path.empty());
+                push_button(ir, ic.top, ic.bottom, "Change...", [&p] {
+                    string path = open_file_dialog(w.wnd, L"Profile icon", {{L"Images", L"*.png;*.ico;*.jpg;*.bmp;*.exe"}});
+                    if(path.empty()) return;
+                    p.user_icon_path = path;
+                    icons::clear();
+                    changed();
+                    request_rebuild();
                 });
+                RECT cc = b.row("Highlight colour", "A coloured ring around the icon in the picker");
+                int cr = cc.right;
                 if(p.use_user_color) {
-                    f.button("Pick colour...", [&p] { pick_colour(p); }, true);
+                    push_button(cr, cc.top, cc.bottom, "Pick...", [&p] { pick_colour(p); });
+                }
+                toggle({cr - S(96), cc.top, cr, cc.bottom}, [&p] { return p.use_user_color; }, [&p](bool v) {
+                    p.use_user_color = v;
+                    icons::clear();
+                    changed();
+                    request_rebuild();
+                });
+            }
+            build_rules(b, br, p);
+            b.indent = 0;
+        }
+
+        void build_browsers(builder& b) {
+            b.section("browsers", "Browsers");
+            b.begin_card();
+            RECT c = b.row("Show hidden browsers and profiles", "Hidden ones never appear in the picker");
+            int right = c.right;
+            toggle({right - S(96), c.top, right, c.bottom}, g_state.show_hidden_browsers, [] {
+                changed();
+                request_rebuild();
+            });
+            right -= S(104);
+            push_button(right, c.top, c.bottom, "Rediscover", [] { host::rediscover(); });
+            push_button(right, c.top, c.bottom, "Add...", [] {
+                if(add_browser(w.wnd)) request_rebuild();
+            });
+            b.end_card();
+
+            const int nb = static_cast<int>(g_state.browsers.size());
+            for(int bi = 0; bi < nb; bi++) {
+                browser& br = g_state.browsers[bi];
+                if(br.is_hidden && !g_state.show_hidden_browsers) continue;
+                const bool full = br.management == management_extent::full;
+
+                w.sections.push_back({format("browser:{}", bi), br.name, 1, b.y});
+                b.begin_card();
+                string engine = br.engine == browser_engine::chromium ? "Chromium based"
+                              : br.engine == browser_engine::gecko ? "Gecko based" : "Generic";
+                string managed = full ? "found by discovery"
+                               : br.management == management_extent::profiles ? "added by hand, profiles discovered" : "added by hand";
+                const int icon_px = S(36);
+                RECT hc = b.row(br.name, format("{} · {} · {} {}", engine, managed, br.profiles.size(),
+                    br.profiles.size() == 1 ? "profile" : "profiles"), icon_px,
+                    icons::path_bitmap(br.get_best_icon_path(), icon_px, false), nullptr, true, S(8));
+                int hr = hc.right;
+                toggle({hr - S(96), hc.top, hr, hc.bottom}, [&br] { return !br.is_hidden; }, [&br](bool v) {
+                    br.is_hidden = !v;
+                    changed();
+                    request_rebuild();
+                });
+                hr -= S(104);
+                glyph_button(hr, hc.top, hc.bottom, G_DELETE, "Delete browser", [bi] {
+                    if(::MessageBoxW(w.wnd, L"Delete this browser and all its rules?", L"Delete", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+                    g_state.browsers.erase(g_state.browsers.begin() + bi);
+                    changed();
+                    request_rebuild();
+                });
+                glyph_button(hr, hc.top, hc.bottom, G_DOWN, "Move down in the picker", [bi] {
+                    swap(g_state.browsers[bi], g_state.browsers[bi + 1]);
+                    changed();
+                    request_rebuild();
+                }, bi + 1 < nb);
+                glyph_button(hr, hc.top, hc.bottom, G_UP, "Move up in the picker", [bi] {
+                    swap(g_state.browsers[bi], g_state.browsers[bi - 1]);
+                    changed();
+                    request_rebuild();
+                }, bi > 0);
+
+                if(!full) field(b.wide_row("Name"), br.name);
+                if(!br.is_internal()) {
+                    const int bw = S(96);
+                    RECT fc = b.wide_row("Command", bw);
+                    field(fc, br.open_cmd, full);
+                    int fr = fc.right + bw;
+                    push_button(fr, fc.top, fc.bottom, "Folder", [&br] {
+                        shell_open(filesystem::path{br.open_cmd}.parent_path().string());
+                    });
+                    if(!br.data_path.empty()) {
+                        RECT dc = b.wide_row("Data folder", bw);
+                        field(dc, br.data_path, full);
+                        int dr = dc.right + bw;
+                        push_button(dr, dc.top, dc.bottom, "Open", [&br] { shell_open(br.data_path); });
+                    }
+                }
+                if(br.engine == browser_engine::gecko) {
+                    toggle(b.row("Discover legacy profiles"), br.discover_classic_gecko_profiles);
+                    toggle(b.row("Discover containers"), br.discover_containers);
+                    RECT pc = b.row("Firefox profiles", "Manage profiles in Firefox itself");
+                    int pr = pc.right;
+                    push_button(pr, pc.top, pc.bottom, "about:profiles", [&br] { shell_open(br.open_cmd, "about:profiles"); });
+                    push_button(pr, pc.top, pc.bottom, "Profile manager", [&br] { shell_open(br.open_cmd, "-P"); });
+                }
+
+                for(int pi = 0; pi < static_cast<int>(br.profiles.size()); pi++) {
+                    if(br.profiles[pi].is_hidden && !g_state.show_hidden_browsers && br.management != management_extent::none) continue;
+                    build_profile(b, br, pi);
+                    if(br.management == management_extent::none) break;   // one profile, edited as the browser
+                }
+                b.end_card();
+            }
+        }
+
+        void build_picker(builder& b) {
+            auto& p = g_state.picker;
+            b.section("picker", "Picker");
+            b.subheading("Behaviour");
+            b.begin_card();
+            toggle(b.row("Close when it loses focus"), p.close_on_focus_loss);
+            toggle(b.row("Always on top"), p.always_on_top);
+            toggle(b.row("Show when no rule matches", "Otherwise the default profile opens the link"), p.invoke.on_no_rule);
+            toggle(b.row("Show key hints", "Numbers 1-0 on the first ten profiles"), p.show_key_hints);
+            toggle(b.row("Window frame", "A normal title bar and border"), p.show_native_chrome);
+            b.end_card();
+
+            b.subheading("Open the picker when these keys are held on click");
+            b.begin_card();
+            toggle(b.row("Ctrl + Shift"), p.invoke.on_key_control_shift);
+            toggle(b.row("Ctrl + Alt"), p.invoke.on_key_control_alt);
+            toggle(b.row("Alt + Shift"), p.invoke.on_key_alt_shift);
+            toggle(b.row("Caps Lock on"), p.invoke.on_key_caps_locks);
+            b.end_card();
+
+            b.subheading("Look");
+            b.begin_card();
+            combo(b.row("Labels"), {"None", "Browser and profile", "Browser", "Profile"},
+                [&p] { return static_cast<int>(p.label_display); },
+                [&p](int i) { p.label_display = static_cast<label_display_mode>(i); changed(); });
+            combo(b.row("Icons", "How browser and profile icons combine"),
+                {"Profile on top of browser", "Browser on top of profile", "Browser only", "Profile only"},
+                [] { return static_cast<int>(g_state.icon_overlay); },
+                [](int i) { g_state.icon_overlay = static_cast<icon_overlay_mode>(i); changed(); });
+            number(b.row("Item size", "16 to 256"), p.box_size, 16.0f, 256.0f);
+            number(b.row("Item padding", "0 to 100"), p.item_padding, 0.0f, 100.0f);
+            number(b.row("Item rounding", "0 to 128"), p.item_rounding, 0.0f, 128.0f);
+            number(b.row("Label size", "-15 to 15, relative to the normal text"), p.label_size, -15.0f, 15.0f);
+            number(b.row("Minimum width", "Percent of the screen"), p.min_width_perc, 10, 90);
+            number(b.row("Maximum width", "Percent of the screen"), p.max_width_perc, 20, 100);
+            number(b.row("Border width"), p.border_width, 0, 10);
+            number(b.row("Opacity", "0.1 to 1"), p.opacity, 0.1f, 1.0f);
+            number(b.row("Colour ring width"), g_state.highlight_width, 0, 20);
+            RECT c = b.row("Reset", "Back to the default look and behaviour");
+            int right = c.right;
+            push_button(right, c.top, c.bottom, "Reset picker", [] {
+                g_state.picker = picker_state{};
+                changed();
+                request_rebuild();
+            });
+            b.end_card();
+        }
+
+        void build_toast(builder& b) {
+            auto& t = g_state.toast;
+            b.section("toast", "Toast");
+            b.begin_card();
+            toggle(b.row("Show a toast when a rule opens a link", "Says where the click came from and where it went"), t.enabled);
+            number(b.row("Visible for", "Seconds"), t.visible_seconds, 0, 60);
+            number(b.row("Fade", "Seconds"), t.anim_duration, 0.0f, 5.0f);
+            number(b.row("Border width"), t.border_width, 0, 6);
+            number(b.row("Opacity", "0.2 to 1"), t.opacity, 0.2f, 1.0f);
+            b.end_card();
+        }
+
+        void build_cleanup(builder& b) {
+            auto& t = g_state.transforms;
+            auto reload = [] { host::state_changed(true); };
+            b.section("cleanup", "Link cleanup");
+            b.begin_card();
+            toggle(b.row("Unwrap Office 365 safe links"), t.unwrap_o365, reload);
+            toggle(b.row("Unshorten short links", "Follows t.co, bit.ly and similar"), t.unshorten, reload);
+            toggle(b.row("Remove trackers", "ClearURLs rules"), t.clearurls, reload);
+            RECT c = b.row("Substitute text in links", "Find and replace, plain or regex");
+            int right = c.right;
+            toggle({right - S(96), c.top, right, c.bottom}, t.substitute, reload);
+            right -= S(104);
+            push_button(right, c.top, c.bottom, "Edit...", [] { show_substitutions(w.wnd); });
+            c = b.row("Lua pipeline functions", "ppl_* functions in scripts.lua");
+            right = c.right;
+            toggle({right - S(96), c.top, right, c.bottom}, t.scripting, reload);
+            right -= S(104);
+            push_button(right, c.top, c.bottom, "Script editor", [] { show_script_editor(); });
+            b.end_card();
+        }
+
+        void build_general(builder& b) {
+            b.section("general", "General");
+            b.begin_card();
+            toggle(b.row("Run at Windows sign-in", "Keeps the first click fast"), g_state.run_at_startup);
+            toggle(b.row("Tray icon"), g_state.show_tray_icon);
+            toggle(b.row("Rediscover browsers when settings open"), g_state.rediscover_on_config_startup);
+            toggle(b.row("Discover the Black Hole browser", "A browser that opens nothing"), g_state.discover_black_hole_browser, [] {
+                changed();
+                host::rediscover();
+            });
+            toggle(b.row("Log clicks", "clicks_<month>.csv in the configuration folder"), g_state.log_rule_hits);
+            toggle(b.row("Log picker timing", "timing.log in the configuration folder"), g_state.log_timing);
+            b.end_card();
+        }
+
+        void build_tools(builder& b) {
+            b.section("tools", "Tools");
+            b.begin_card();
+            auto tool = [&](const string& title, const string& desc, const string& button, function<void()> fn) {
+                RECT c = b.row(title, desc);
+                int right = c.right;
+                push_button(right, c.top, c.bottom, button, fn);
+            };
+            tool("Windows default apps", "Make Browser Tamer the default browser", "Open", [] { shell_open("ms-settings:defaultapps"); });
+            tool(strings::PipelineDebugger, "See how a link is cleaned and which rules match", "Open", [] { show_pipeline_debugger(); });
+            tool(strings::ScriptEditor, "Edit scripts.lua", "Open", [] { show_script_editor(); });
+            tool("Configuration folder", fss::get_config_dir(CONFIG_NAME), "Open", [] { shell_open(fss::get_config_dir(CONFIG_NAME)); });
+            tool("Exit Browser Tamer", "Stops the background instance until the next click", "Exit", [] {
+                ::DestroyWindow(w.wnd);
+                host::quit();
+            });
+            b.end_card();
+        }
+
+        void build_about(builder& b) {
+            b.section("about", "About");
+            b.begin_card();
+            RECT c = b.row(format("{} {}", APP_LONG_NAME, APP_VERSION), "Win32 build, running in the background", S(32),
+                icons::path_bitmap("logo", S(32), false));
+            int right = c.right;
+            push_button(right, c.top, c.bottom, "Releases", [] { shell_open(APP_GITHUB_RELEASES_URL); });
+            push_button(right, c.top, c.bottom, "Documentation", [] { shell_open(APP_DOCS_URL); });
+            string timings = host::timing_summary();
+            int lines = static_cast<int>(ranges::count(timings, '\n')) + 1;
+            RECT t = b.row("Recent clicks", "Time from click to picker or browser start, newest first", 0, nullptr, nullptr, false,
+                max(0, S(18) * min(lines, 8) - S(10)));
+            (void)t;
+            w.texts.push_back({{t.left, t.top + S(12), t.right, t.bottom - S(8)}, wide(timings), mono_font(w.dpi), C_DIM, DT_LEFT | DT_NOPREFIX});
+            b.end_card();
+        }
+
+        // ---- page painting
+
+        void paint_page(HDC target, const RECT& clip) {
+            const int cw = clip.right - clip.left, ch = clip.bottom - clip.top;
+            if(cw <= 0 || ch <= 0) return;
+            HDC hdc = ::CreateCompatibleDC(target);
+            HBITMAP bmp = ::CreateCompatibleBitmap(target, cw, ch);
+            HGDIOBJ old = ::SelectObject(hdc, bmp);
+            ::SetViewportOrgEx(hdc, -clip.left, -clip.top, nullptr);
+
+            ::FillRect(hdc, &clip, brush(C_BG));
+            {
+                Gdiplus::Graphics g{hdc};
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                // the DC's viewport origin already maps page coordinates into the buffer
+                Gdiplus::SolidBrush card{gp(C_CARD)};
+                Gdiplus::Pen border{gp(C_CARD_BORDER), 1.0f};
+                const float r = static_cast<float>(S(8));
+                for(const RECT& c : w.cards) {
+                    if(c.bottom < clip.top || c.top > clip.bottom) continue;
+                    Gdiplus::GraphicsPath path;
+                    rounded(path, c.left + 0.5f, c.top + 0.5f, static_cast<float>(c.right - c.left - 1), static_cast<float>(c.bottom - c.top - 1), r);
+                    g.FillPath(&card, &path);
+                    g.DrawPath(&border, &path);
+                }
+                Gdiplus::Pen field_border{gp(C_FIELD_BORDER), 1.0f};
+                Gdiplus::SolidBrush field{gp(C_FIELD)}, field_ro{gp(C_FIELD_RO)};
+                const float fr = static_cast<float>(S(5));
+                for(auto* list : {&w.fields, &w.ro_fields}) {
+                    for(const RECT& f : *list) {
+                        if(f.bottom < clip.top || f.top > clip.bottom) continue;
+                        Gdiplus::GraphicsPath path;
+                        rounded(path, f.left + 0.5f, f.top + 0.5f, static_cast<float>(f.right - f.left - 1), static_cast<float>(f.bottom - f.top - 1), fr);
+                        g.FillPath(list == &w.fields ? &field : &field_ro, &path);
+                        g.DrawPath(&field_border, &path);
+                    }
                 }
             }
+            for(const RECT& l : w.lines) {
+                if(l.top >= clip.top && l.top <= clip.bottom) ::FillRect(hdc, &l, brush(C_LINE));
+            }
+            ::SetBkMode(hdc, TRANSPARENT);
+            for(auto& t : w.texts) {
+                if(t.r.bottom < clip.top || t.r.top > clip.bottom) continue;
+                HGDIOBJ of = ::SelectObject(hdc, t.font);
+                ::SetTextColor(hdc, t.colour);
+                RECT r = t.r;
+                ::DrawTextW(hdc, t.s.c_str(), -1, &r, t.flags);
+                ::SelectObject(hdc, of);
+            }
+            for(auto& gl : w.glyphs) {
+                if(gl.r.bottom < clip.top || gl.r.top > clip.bottom) continue;
+                HGDIOBJ of = ::SelectObject(hdc, icon_font(w.dpi, gl.size_pt));
+                ::SetTextColor(hdc, gl.colour);
+                RECT r = gl.r;
+                ::DrawTextW(hdc, gl.g.c_str(), -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                ::SelectObject(hdc, of);
+            }
+            for(auto& bm : w.bitmaps) {
+                if(bm.y > clip.bottom || bm.y + S(64) < clip.top) continue;
+                icons::draw(hdc, bm.bmp, bm.x, bm.y);
+            }
 
-            f.section("Rules");
-            ::ShowWindow(s.rules, SW_SHOWNA);
-            for(HWND h : s.rule_buttons) ::ShowWindow(h, SW_SHOWNA);
-            layout_rules(f.bottom());
-            refresh_rules();
+            ::SetViewportOrgEx(hdc, 0, 0, nullptr);
+            ::BitBlt(target, clip.left, clip.top, cw, ch, hdc, 0, 0, SRCCOPY);
+            ::SelectObject(hdc, old);
+            ::DeleteObject(bmp);
+            ::DeleteDC(hdc);
+        }
 
-            ::SendMessageW(s.wnd, WM_SETREDRAW, TRUE, 0);
-            ::RedrawWindow(s.wnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        void draw_control(const DRAWITEMSTRUCT& di) {
+            auto it = w.infos.find(static_cast<int>(di.CtlID));
+            if(it == w.infos.end()) return;
+            const control_info& info = it->second;
+            HDC hdc = di.hDC;
+            RECT rc = di.rcItem;
+            ::FillRect(hdc, &rc, brush(C_CARD));
+            const bool disabled = di.itemState & ODS_DISABLED;
+            const bool pressed = di.itemState & ODS_SELECTED;
+            const bool focus = di.itemState & ODS_FOCUS;
+
+            if(info.kind == ctl_kind::toggle) {
+                const bool on = info.get && info.get();
+                const int sw = S(40), sh = S(20);
+                const int sx = rc.right - sw - S(2), sy = rc.top + (rc.bottom - rc.top - sh) / 2;
+                {
+                    Gdiplus::Graphics g{hdc};
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    Gdiplus::GraphicsPath track;
+                    rounded(track, sx + 0.5f, sy + 0.5f, static_cast<float>(sw - 1), static_cast<float>(sh - 1), (sh - 1) / 2.0f);
+                    if(on) {
+                        Gdiplus::SolidBrush fill{gp(C_ACCENT)};
+                        g.FillPath(&fill, &track);
+                    } else {
+                        Gdiplus::SolidBrush fill{gp(C_CARD)};
+                        Gdiplus::Pen pen{gp(RGB(134, 134, 134)), 1.0f};
+                        g.FillPath(&fill, &track);
+                        g.DrawPath(&pen, &track);
+                    }
+                    const float knob = sh * (pressed ? 0.6f : 0.5f);
+                    const float kx = on ? sx + sw - sh / 2.0f - knob / 2 : sx + sh / 2.0f - knob / 2;
+                    const float ky = sy + sh / 2.0f - knob / 2;
+                    Gdiplus::SolidBrush kb{on ? Gdiplus::Color{255, 255, 255, 255} : gp(RGB(95, 95, 95))};
+                    g.FillEllipse(&kb, kx, ky, knob, knob);
+                }
+                RECT tr{rc.left, rc.top, sx - S(10), rc.bottom};
+                ::SetBkMode(hdc, TRANSPARENT);
+                ::SetTextColor(hdc, C_TEXT);
+                HGDIOBJ of = ::SelectObject(hdc, ui_font(w.dpi));
+                ::DrawTextW(hdc, on ? L"On" : L"Off", -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                ::SelectObject(hdc, of);
+            } else if(info.kind == ctl_kind::glyph_button) {
+                if(pressed) {
+                    Gdiplus::Graphics g{hdc};
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    Gdiplus::GraphicsPath path;
+                    rounded(path, rc.left + 0.5f, rc.top + 0.5f, static_cast<float>(rc.right - rc.left - 1), static_cast<float>(rc.bottom - rc.top - 1), static_cast<float>(S(4)));
+                    Gdiplus::SolidBrush fill{gp(C_NAV_SEL)};
+                    g.FillPath(&fill, &path);
+                }
+                ::SetBkMode(hdc, TRANSPARENT);
+                ::SetTextColor(hdc, disabled ? RGB(190, 190, 190) : C_TEXT);
+                HGDIOBJ of = ::SelectObject(hdc, icon_font(w.dpi, 11));
+                ::DrawTextW(hdc, info.glyph.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                ::SelectObject(hdc, of);
+            }
+            if(focus && !(di.itemState & ODS_NOFOCUSRECT)) {
+                RECT fr = rc;
+                ::InflateRect(&fr, -1, -1);
+                ::DrawFocusRect(hdc, &fr);
+            }
+        }
+
+        // ---- scrolling and navigation
+
+        int nav_width() { return S(260); }
+        int nav_item_h() { return S(36); }
+        int nav_top() { return S(84); }
+
+        RECT view_rect() {
+            RECT rc;
+            ::GetClientRect(w.wnd, &rc);
+            return {nav_width(), 0, rc.right, rc.bottom};
+        }
+
+        int view_height() {
+            RECT v = view_rect();
+            return v.bottom - v.top;
+        }
+
+        int current_section() {
+            int idx = 0;
+            for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
+                if(w.sections[i].y <= w.scroll + S(40)) idx = i;
+            }
+            return idx;
+        }
+
+        void set_scroll(int y) {
+            const int max_scroll = max(0, w.page_h - view_height());
+            w.scroll = clamp(y, 0, max_scroll);
+            ::SetWindowPos(w.page, nullptr, 0, -w.scroll, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SCROLLINFO si{sizeof(si), SIF_ALL};
+            si.nMin = 0;
+            si.nMax = max(0, w.page_h - 1);
+            si.nPage = static_cast<UINT>(view_height());
+            si.nPos = w.scroll;
+            ::SetScrollInfo(w.view, SB_VERT, &si, TRUE);
+            RECT nav{0, 0, nav_width(), 30000};
+            ::InvalidateRect(w.wnd, &nav, FALSE);
+        }
+
+        void scroll_to(const string& id) {
+            for(auto& s : w.sections) {
+                if(s.id == id) {
+                    set_scroll(s.y - S(12));
+                    return;
+                }
+            }
+        }
+
+        void paint_nav(HDC target) {
+            RECT rc;
+            ::GetClientRect(w.wnd, &rc);
+            RECT nav{0, 0, nav_width(), rc.bottom};
+            HDC hdc = ::CreateCompatibleDC(target);
+            HBITMAP bmp = ::CreateCompatibleBitmap(target, nav.right, nav.bottom);
+            HGDIOBJ old = ::SelectObject(hdc, bmp);
+            ::FillRect(hdc, &nav, brush(C_BG));
+            ::SetBkMode(hdc, TRANSPARENT);
+
+            // app title
+            icons::draw(hdc, icons::path_bitmap("logo", S(28), false), S(20), S(24));
+            HGDIOBJ of = ::SelectObject(hdc, ui_font(w.dpi, 3, true));
+            ::SetTextColor(hdc, C_TEXT);
+            RECT tr{S(58), S(20), nav.right - S(8), S(56)};
+            ::DrawTextW(hdc, L"Browser Tamer", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+            const int cur = current_section();
+            int y = nav_top();
+            for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
+                const auto& s = w.sections[i];
+                RECT item{S(10), y, nav.right - S(10), y + nav_item_h()};
+                if(i == cur) {
+                    Gdiplus::Graphics g{hdc};
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    Gdiplus::GraphicsPath path;
+                    rounded(path, static_cast<float>(item.left), static_cast<float>(item.top + S(2)),
+                        static_cast<float>(item.right - item.left), static_cast<float>(nav_item_h() - S(4)), static_cast<float>(S(5)));
+                    Gdiplus::SolidBrush sel{gp(C_NAV_SEL)};
+                    g.FillPath(&sel, &path);
+                    Gdiplus::SolidBrush bar{gp(C_ACCENT)};
+                    g.FillRectangle(&bar, static_cast<float>(item.left), item.top + nav_item_h() * 0.3f, static_cast<float>(S(3)), nav_item_h() * 0.4f);
+                }
+                RECT t{item.left + S(14) + s.indent * S(16), item.top, item.right - S(6), item.bottom};
+                ::SelectObject(hdc, s.indent ? ui_font(w.dpi) : ui_font(w.dpi, 1));
+                ::SetTextColor(hdc, s.indent ? C_DIM : C_TEXT);
+                wstring title = wide(s.title);
+                ::DrawTextW(hdc, title.c_str(), -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                y += nav_item_h();
+            }
+            ::SelectObject(hdc, of);
+            ::BitBlt(target, 0, 0, nav.right, nav.bottom, hdc, 0, 0, SRCCOPY);
+            ::SelectObject(hdc, old);
+            ::DeleteObject(bmp);
+            ::DeleteDC(hdc);
+        }
+
+        // ---- build
+
+        void rebuild() {
+            if(!w.page) return;
+            ::SendMessageW(w.page, WM_SETREDRAW, FALSE, 0);
+            for(HWND h : w.controls) ::DestroyWindow(h);
+            w.controls.clear();
+            w.infos.clear();
+            w.cards.clear();
+            w.lines.clear();
+            w.fields.clear();
+            w.ro_fields.clear();
+            w.texts.clear();
+            w.glyphs.clear();
+            w.bitmaps.clear();
+            w.sections.clear();
+            w.next_id = 1000;
+            if(w.tooltip) ::DestroyWindow(w.tooltip);
+            w.tooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                0, 0, 0, 0, w.page, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+
+            RECT v = view_rect();
+            const int width = v.right - v.left - ::GetSystemMetricsForDpi(SM_CXVSCROLL, w.dpi);
+            w.built_width = v.right - v.left;
+            builder b{width};
+            build_status(b);
+            build_browsers(b);
+            build_picker(b);
+            build_toast(b);
+            build_cleanup(b);
+            build_general(b);
+            build_tools(b);
+            build_about(b);
+            w.page_h = b.y + S(40);
+
+            ::SetWindowPos(w.page, nullptr, 0, -w.scroll, width, w.page_h, SWP_NOZORDER | SWP_NOACTIVATE);
+            ::SendMessageW(w.page, WM_SETREDRAW, TRUE, 0);
+            set_scroll(w.scroll);
+            ::RedrawWindow(w.wnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
         }
 
         void layout() {
-            RECT rc;
-            ::GetClientRect(s.wnd, &rc);
-            ::SendMessageW(s.status, WM_SIZE, 0, 0);
-            RECT sb;
-            ::GetWindowRect(s.status, &sb);
-            const int status_h = sb.bottom - sb.top;
-            const int m = scale(10, s.dpi), bh = scale(26, s.dpi), lw = left_width();
-            int x = m;
-            for(HWND h : {s.btn_add, s.btn_rediscover, s.btn_up, s.btn_down}) {
-                int w = h == s.btn_add ? scale(64, s.dpi) : h == s.btn_rediscover ? scale(84, s.dpi) : scale(32, s.dpi);
-                ::MoveWindow(h, x, m, w, bh, TRUE);
-                x += w + scale(4, s.dpi);
-            }
-            ::MoveWindow(s.chk_hidden, m, m + bh + scale(4, s.dpi), lw, scale(22, s.dpi), TRUE);
-            int ty = m + bh + scale(30, s.dpi);
-            ::MoveWindow(s.tree, m, ty, lw, rc.bottom - status_h - ty - m, TRUE);
-            rebuild_detail();
+            RECT v = view_rect();
+            ::MoveWindow(w.view, v.left, v.top, v.right - v.left, v.bottom - v.top, TRUE);
+            if(v.right - v.left != w.built_width) rebuild();
+            else set_scroll(w.scroll);
         }
 
-        HMENU build_menu() {
-            HMENU bar = ::CreateMenu();
-            HMENU file = ::CreatePopupMenu();
-            ::AppendMenuW(file, MF_STRING, M_ADD_BROWSER, L"&Add custom browser...");
-            ::AppendMenuW(file, MF_STRING, M_OPEN_CONFIG_DIR, L"&Open configuration folder");
-            ::AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-            ::AppendMenuW(file, MF_STRING, M_CLOSE, L"&Close window");
-            ::AppendMenuW(file, MF_STRING, M_EXIT_APP, L"E&xit Browser Tamer");
-            HMENU tools = ::CreatePopupMenu();
-            ::AppendMenuW(tools, MF_STRING, M_DEFAULT_APPS, L"Windows &default apps...");
-            ::AppendMenuW(tools, MF_STRING, M_PIPELINE, wide(strings::PipelineDebugger + "...").c_str());
-            ::AppendMenuW(tools, MF_STRING, M_SCRIPT, wide(strings::ScriptEditor + "...").c_str());
-            ::AppendMenuW(tools, MF_STRING, M_SUBS, L"&Substitutions...");
-            ::AppendMenuW(tools, MF_SEPARATOR, 0, nullptr);
-            ::AppendMenuW(tools, MF_STRING, M_REDISCOVER, L"&Rediscover browsers");
-            ::AppendMenuW(tools, MF_STRING | (g_state.discover_black_hole_browser ? MF_CHECKED : 0), M_BLACK_HOLE, L"Discover &Black Hole browser");
-            ::AppendMenuW(tools, MF_STRING, M_HEALTH, L"Re-check &health");
-            HMENU options = ::CreatePopupMenu();
-            ::AppendMenuW(options, MF_STRING, M_OPTIONS, L"&Options...");
-            ::AppendMenuW(options, MF_STRING, M_PICKER_OPTIONS, L"&Picker...");
-            HMENU help = ::CreatePopupMenu();
-            ::AppendMenuW(help, MF_STRING, M_DOCS, L"&Documentation");
-            ::AppendMenuW(help, MF_STRING, M_RELEASES, L"All &releases");
-            ::AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
-            ::AppendMenuW(help, MF_STRING, M_ABOUT, L"&About");
-            ::AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
-            ::AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"&Tools");
-            ::AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(options), L"&Settings");
-            ::AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"&Help");
-            return bar;
-        }
+        // ---- window procedures
 
-        void move_selected(int delta) {
-            browser* b = selected_browser();
-            if(!b) return;
-            const bool profile_node = b->management != management_extent::none && s.sel_profile >= 0;
-            if(profile_node) {
-                int to = s.sel_profile + delta;
-                if(to < 0 || to >= static_cast<int>(b->profiles.size())) return;
-                swap(b->profiles[s.sel_profile], b->profiles[to]);
-                s.sel_profile = to;
-            } else {
-                int to = s.sel_browser + delta;
-                if(to < 0 || to >= static_cast<int>(g_state.browsers.size())) return;
-                swap(g_state.browsers[s.sel_browser], g_state.browsers[to]);
-                s.sel_browser = to;
-            }
-            changed();
-            rebuild_tree();
-        }
-
-        void on_command(int id, int code, LPARAM lp) {
-            if(id >= ID_RULE_ADD && id <= ID_RULE_HELP) {
-                on_rule_command(id);
-                return;
-            }
-            switch(id) {
-                case ID_ADD:
-                case M_ADD_BROWSER:
-                    if(add_browser(s.wnd)) {
-                        s.sel_browser = static_cast<int>(g_state.browsers.size()) - 1;
-                        s.sel_profile = 0;
-                        rebuild_tree();
-                        refresh_status();
-                    }
-                    return;
-                case ID_REDISCOVER:
-                case M_REDISCOVER:
-                    host::rediscover();
-                    return;
-                case ID_UP:
-                    move_selected(-1);
-                    return;
-                case ID_DOWN:
-                    move_selected(1);
-                    return;
-                case ID_SHOW_HIDDEN:
-                    g_state.show_hidden_browsers = ::SendMessageW(s.chk_hidden, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                    changed();
-                    rebuild_tree();
-                    return;
-                case M_OPEN_CONFIG_DIR:
-                    shell_open(fss::get_config_dir(CONFIG_NAME));
-                    return;
-                case M_CLOSE:
-                    ::DestroyWindow(s.wnd);
-                    return;
-                case M_EXIT_APP:
-                    ::DestroyWindow(s.wnd);
-                    host::quit();
-                    return;
-                case M_DEFAULT_APPS:
-                    for(auto& c : s.health) c.fix();
-                    if(s.health.empty()) shell_open("ms-settings:defaultapps");
-                    return;
-                case M_PIPELINE:
-                    show_pipeline_debugger();
-                    return;
-                case M_SCRIPT:
-                    show_script_editor();
-                    return;
-                case M_SUBS:
-                    show_substitutions(s.wnd);
-                    return;
-                case M_BLACK_HOLE: {
-                    g_state.discover_black_hole_browser = !g_state.discover_black_hole_browser;
-                    ::CheckMenuItem(::GetMenu(s.wnd), M_BLACK_HOLE, g_state.discover_black_hole_browser ? MF_CHECKED : MF_UNCHECKED);
-                    host::rediscover();
-                    return;
-                }
-                case M_HEALTH:
-                    refresh_status();
-                    return;
-                case M_OPTIONS:
-                    show_settings_dialog(s.wnd, 0);
-                    return;
-                case M_PICKER_OPTIONS:
-                    show_settings_dialog(s.wnd, 1);
-                    return;
-                case M_DOCS:
-                    shell_open(APP_DOCS_URL);
-                    return;
-                case M_RELEASES:
-                    shell_open(APP_GITHUB_RELEASES_URL);
-                    return;
-                case M_ABOUT:
-                    message_box(s.wnd, "About",
-                        format("{} {} (Win32)\n\nRuns in the background and shows the picker when a link needs one.\n\n"
-                               "Click to picker, most recent first:\n{}", APP_LONG_NAME, APP_VERSION, host::timing_summary()));
-                    return;
-                default:
-                    if(s.f) s.f->on_command(MAKEWPARAM(id, code), lp);
-                    return;
-            }
-        }
-
-        optional<LRESULT> handle(HWND hwnd, UINT m, WPARAM w, LPARAM l) {
+        optional<LRESULT> page_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             switch(m) {
+                case WM_ERASEBKGND:
+                    return 1;
+                case WM_PAINT: {
+                    PAINTSTRUCT ps;
+                    HDC hdc = ::BeginPaint(h, &ps);
+                    paint_page(hdc, ps.rcPaint);
+                    ::EndPaint(h, &ps);
+                    return 0;
+                }
+                case WM_COMMAND: {
+                    auto it = w.infos.find(LOWORD(wp));
+                    if(it != w.infos.end() && it->second.on) {
+                        auto fn = it->second.on;   // the handler may rebuild the page
+                        fn(HIWORD(wp));
+                        if(it = w.infos.find(LOWORD(wp)); it != w.infos.end() && it->second.kind == ctl_kind::toggle)
+                            ::InvalidateRect(reinterpret_cast<HWND>(lp), nullptr, FALSE);
+                    }
+                    return 0;
+                }
+                case WM_DRAWITEM:
+                    draw_control(*reinterpret_cast<DRAWITEMSTRUCT*>(lp));
+                    return TRUE;
+                case WM_CTLCOLOREDIT: {
+                    HDC hdc = reinterpret_cast<HDC>(wp);
+                    ::SetTextColor(hdc, C_TEXT);
+                    ::SetBkColor(hdc, C_FIELD);
+                    return reinterpret_cast<LRESULT>(brush(C_FIELD));
+                }
+                case WM_CTLCOLORSTATIC: {
+                    // read-only edits
+                    HDC hdc = reinterpret_cast<HDC>(wp);
+                    ::SetTextColor(hdc, C_DIM);
+                    ::SetBkColor(hdc, C_FIELD_RO);
+                    return reinterpret_cast<LRESULT>(brush(C_FIELD_RO));
+                }
+                case WM_CTLCOLORBTN:
+                    return reinterpret_cast<LRESULT>(brush(C_CARD));
+                case WM_MOUSEWHEEL:
+                    return ::SendMessageW(w.view, m, wp, lp);
+                default:
+                    break;
+            }
+            return nullopt;
+        }
+
+        optional<LRESULT> view_proc(HWND, UINT m, WPARAM wp, LPARAM) {
+            switch(m) {
+                case WM_ERASEBKGND:
+                    return 1;
+                case WM_MOUSEWHEEL: {
+                    const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+                    set_scroll(w.scroll - delta * S(120) / WHEEL_DELTA);
+                    return 0;
+                }
+                case WM_VSCROLL: {
+                    SCROLLINFO si{sizeof(si), SIF_ALL};
+                    ::GetScrollInfo(w.view, SB_VERT, &si);
+                    int y = w.scroll;
+                    switch(LOWORD(wp)) {
+                        case SB_LINEUP: y -= S(40); break;
+                        case SB_LINEDOWN: y += S(40); break;
+                        case SB_PAGEUP: y -= view_height(); break;
+                        case SB_PAGEDOWN: y += view_height(); break;
+                        case SB_THUMBTRACK:
+                        case SB_THUMBPOSITION: y = si.nTrackPos; break;
+                        case SB_TOP: y = 0; break;
+                        case SB_BOTTOM: y = w.page_h; break;
+                        default: break;
+                    }
+                    set_scroll(y);
+                    return 0;
+                }
+                default:
+                    break;
+            }
+            return nullopt;
+        }
+
+        optional<LRESULT> main_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp) {
+            switch(m) {
+                case WM_ERASEBKGND:
+                    return 1;
+                case WM_PAINT: {
+                    PAINTSTRUCT ps;
+                    HDC hdc = ::BeginPaint(hwnd, &ps);
+                    paint_nav(hdc);
+                    ::EndPaint(hwnd, &ps);
+                    return 0;
+                }
                 case WM_SIZE:
-                    if(s.tree) layout();
+                    if(w.view) layout();
                     return 0;
                 case WM_GETMINMAXINFO: {
-                    auto* mmi = reinterpret_cast<MINMAXINFO*>(l);
-                    mmi->ptMinTrackSize = {scale(860, s.dpi), scale(640, s.dpi)};
+                    auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
+                    mmi->ptMinTrackSize = {S(860), S(560)};
                     return 0;
                 }
                 case WM_DPICHANGED: {
-                    s.dpi = HIWORD(w);
-                    auto* r = reinterpret_cast<RECT*>(l);
+                    w.dpi = HIWORD(wp);
+                    auto* r = reinterpret_cast<RECT*>(lp);
+                    w.built_width = 0;
                     ::SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
-                    rebuild_tree();
                     return 0;
                 }
-                case WM_ACTIVATE:
-                    if(LOWORD(w) != WA_INACTIVE) refresh_status();
-                    return nullopt;
-                case WM_COMMAND:
-                    on_command(LOWORD(w), HIWORD(w), l);
+                case WM_LBUTTONUP: {
+                    const int x = static_cast<short>(LOWORD(lp)), y = static_cast<short>(HIWORD(lp));
+                    if(x < nav_width() && y >= nav_top()) {
+                        int i = (y - nav_top()) / nav_item_h();
+                        if(i >= 0 && i < static_cast<int>(w.sections.size())) set_scroll(w.sections[i].y - S(12));
+                    }
                     return 0;
-                case WM_NOTIFY: {
-                    auto* hdr = reinterpret_cast<NMHDR*>(l);
-                    if(hdr->hwndFrom == s.tree && hdr->code == TVN_SELCHANGEDW && !s.building_tree) {
-                        on_tree_selection(reinterpret_cast<NMTREEVIEWW*>(l)->itemNew.lParam);
-                        return 0;
-                    }
-                    if(hdr->hwndFrom == s.rules && hdr->code == NM_DBLCLK) {
-                        on_rule_command(selected_rule() >= 0 ? ID_RULE_EDIT : ID_RULE_ADD);
-                        return 0;
-                    }
-                    if(hdr->hwndFrom == s.rules && hdr->code == LVN_KEYDOWN) {
-                        auto* kd = reinterpret_cast<NMLVKEYDOWN*>(l);
-                        if(kd->wVKey == VK_DELETE) on_rule_command(ID_RULE_DEL);
-                        if(kd->wVKey == VK_RETURN) on_rule_command(ID_RULE_EDIT);
-                        return 0;
-                    }
-                    if(hdr->hwndFrom == s.status && hdr->code == NM_CLICK) {
-                        auto* mouse = reinterpret_cast<NMMOUSE*>(l);
-                        if(mouse->dwItemSpec == 0) {
-                            for(auto& c : s.health) if(!c.is_ok) c.fix();
-                            refresh_status();
-                        }
-                        return 0;
-                    }
-                    break;
                 }
-                case WM_DRAWITEM: {
-                    auto* di = reinterpret_cast<DRAWITEMSTRUCT*>(l);
-                    if(di->CtlID == ID_ICON) {
-                        ::FillRect(di->hDC, &di->rcItem, ::GetSysColorBrush(COLOR_WINDOW));
-                        browser* b = selected_browser();
-                        browser_profile* p = selected_profile();
-                        if(b && p) {
-                            HBITMAP bmp = icons::profile_bitmap(*b, *p, di->rcItem.right - di->rcItem.left, icon_overlay_mode::profile_only);
-                            icons::draw(di->hDC, bmp, di->rcItem.left, di->rcItem.top);
-                        }
+                case WM_SETCURSOR: {
+                    POINT pt;
+                    ::GetCursorPos(&pt);
+                    ::ScreenToClient(hwnd, &pt);
+                    if(LOWORD(lp) == HTCLIENT && pt.x < nav_width() && pt.y >= nav_top() &&
+                       (pt.y - nav_top()) / nav_item_h() < static_cast<int>(w.sections.size())) {
+                        ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
                         return TRUE;
                     }
                     break;
                 }
-                case WM_CONTEXTMENU:
-                    if(reinterpret_cast<HWND>(w) == s.icon) {
-                        if(browser_profile* p = selected_profile(); p && !p->user_icon_path.empty()) {
-                            p->user_icon_path.clear();
-                            icons::clear();
-                            changed();
-                            rebuild_tree();
-                        }
-                        return 0;
-                    }
-                    break;
+                case WM_MOUSEWHEEL:
+                    return ::SendMessageW(w.view, m, wp, lp);
+                case WM_APP_REBUILD:
+                    rebuild();
+                    return 0;
+                case WM_ACTIVATE:
+                    return nullopt;
                 case WM_DESTROY:
                     unregister_dialog(hwnd);
-                    if(s.f) s.f->clear();
-                    if(s.images) ImageList_Destroy(s.images);
-                    s = state_t{};
+                    w = window_t{};
                     return 0;
                 default:
                     break;
@@ -729,20 +1289,18 @@ namespace bt::ui::config_window {
     }
 
     HWND hwnd() {
-        return s.wnd;
+        return w.wnd;
     }
 
     void state_reloaded() {
-        if(!s.wnd) return;
-        if(s.sel_browser >= static_cast<int>(g_state.browsers.size())) s.sel_browser = 0;
-        rebuild_tree();
-        refresh_status();
+        if(w.wnd) rebuild();
     }
 
-    void show() {
-        if(s.wnd) {
-            if(::IsIconic(s.wnd)) ::ShowWindow(s.wnd, SW_RESTORE);
-            ::SetForegroundWindow(s.wnd);
+    void show(const string& section) {
+        if(w.wnd) {
+            if(::IsIconic(w.wnd)) ::ShowWindow(w.wnd, SW_RESTORE);
+            ::SetForegroundWindow(w.wnd);
+            if(!section.empty()) scroll_to(section);
             return;
         }
 
@@ -750,51 +1308,20 @@ namespace bt::ui::config_window {
 
         UINT dpi{96};
         RECT work = cursor_work_area(&dpi);
-        s.dpi = dpi;
-        const int w = scale(1000, dpi), h = scale(720, dpi);
-        s.wnd = create_window(0, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, format("{} {}", APP_LONG_NAME, APP_VERSION), nullptr,
-            work.left + (work.right - work.left - w) / 2, work.top + (work.bottom - work.top - h) / 2, w, h,
-            handle, build_menu());
-        s.f = make_unique<form>(s.wnd);
+        w.dpi = dpi;
+        const int ww = S(1100), wh = min(S(860), static_cast<int>(work.bottom - work.top) - S(40));
+        w.wnd = create_window(0, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, format("{} settings", APP_LONG_NAME), nullptr,
+            work.left + (work.right - work.left - ww) / 2, work.top + (work.bottom - work.top - wh) / 2, ww, wh, main_proc);
+        RECT v = view_rect();
+        w.view = create_window(0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN, "", w.wnd,
+            v.left, v.top, v.right - v.left, v.bottom - v.top, view_proc);
+        w.page = create_window(WS_EX_CONTROLPARENT, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, "", w.view, 0, 0, 10, 10, page_proc);
+        ::SetWindowLongPtrW(w.view, GWL_EXSTYLE, ::GetWindowLongPtrW(w.view, GWL_EXSTYLE) | WS_EX_CONTROLPARENT);
 
-        auto button = [](const string& text, int id) {
-            return child(s.wnd, L"Button", text, BS_PUSHBUTTON | WS_TABSTOP, 0, id, s.dpi);
-        };
-        s.btn_add = button("Add...", ID_ADD);
-        s.btn_rediscover = button("Rediscover", ID_REDISCOVER);
-        s.btn_up = button("▲", ID_UP);
-        s.btn_down = button("▼", ID_DOWN);
-        s.chk_hidden = child(s.wnd, L"Button", "Show hidden browsers and profiles", BS_AUTOCHECKBOX | WS_TABSTOP, 0, ID_SHOW_HIDDEN, s.dpi);
-        ::SendMessageW(s.chk_hidden, BM_SETCHECK, g_state.show_hidden_browsers ? BST_CHECKED : BST_UNCHECKED, 0);
-        s.tree = child(s.wnd, WC_TREEVIEWW, "", TVS_SHOWSELALWAYS | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_FULLROWSELECT | WS_TABSTOP,
-            WS_EX_CLIENTEDGE, ID_TREE, s.dpi);
-        ::SendMessageW(s.tree, TVM_SETEXTENDEDSTYLE, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
-        ::SendMessageW(s.tree, TVM_SETITEMHEIGHT, scale(26, s.dpi), 0);
-        s.status = ::CreateWindowExW(0, STATUSCLASSNAMEW, nullptr, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0,
-            s.wnd, reinterpret_cast<HMENU>(ID_STATUS), ::GetModuleHandleW(nullptr), nullptr);
-        ::SendMessageW(s.status, WM_SETFONT, reinterpret_cast<WPARAM>(ui_font(s.dpi)), FALSE);
-        s.icon = child(s.wnd, L"Static", "", SS_OWNERDRAW | SS_NOTIFY, 0, ID_ICON, s.dpi);
-
-        s.rules = child(s.wnd, WC_LISTVIEWW, "", LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_RULES, s.dpi);
-        ::SendMessageW(s.rules, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-        const pair<const wchar_t*, int> cols[] = {{L"Match", 90}, {L"Value", 300}, {L"Look in", 80}, {L"Regex", 60}, {L"App", 50}};
-        for(int i = 0; i < 5; i++) {
-            LVCOLUMNW c{};
-            c.mask = LVCF_TEXT | LVCF_WIDTH;
-            c.pszText = const_cast<wchar_t*>(cols[i].first);
-            c.cx = scale(cols[i].second, s.dpi);
-            ::SendMessageW(s.rules, LVM_INSERTCOLUMNW, i, reinterpret_cast<LPARAM>(&c));
-        }
-        for(auto [id, text] : {pair{ID_RULE_ADD, "Add..."}, pair{ID_RULE_EDIT, "Edit..."}, pair{ID_RULE_DEL, "Delete"},
-                               pair{ID_RULE_UP, "Up"}, pair{ID_RULE_DOWN, "Down"}, pair{ID_RULE_CLEAR, "Clear all"}, pair{ID_RULE_HELP, "Help"}}) {
-            s.rule_buttons.push_back(button(text, id));
-        }
-
-        rebuild_tree();
-        layout();
-        refresh_status();
-        register_dialog(s.wnd);
-        ::ShowWindow(s.wnd, SW_SHOW);
-        ::SetForegroundWindow(s.wnd);
+        rebuild();
+        if(!section.empty()) scroll_to(section);
+        register_dialog(w.wnd);
+        ::ShowWindow(w.wnd, SW_SHOW);
+        ::SetForegroundWindow(w.wnd);
     }
 }
