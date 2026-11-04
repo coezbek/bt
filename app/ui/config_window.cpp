@@ -131,6 +131,7 @@ namespace bt::ui::config_window {
             int page_h{0};
             int built_width{0};
             int nav_scroll{0};      // the navigation scrolls on its own when it is taller than the window
+            int clicked_section{-1};    // a navigation click wins until the user scrolls the page
             bool sizing{false};     // inside a resize drag
             vector<RECT> cards, lines, fields, ro_fields;
             vector<text_item> texts;
@@ -1071,6 +1072,7 @@ namespace bt::ui::config_window {
         }
 
         int current_section() {
+            if(w.clicked_section >= 0 && w.clicked_section < static_cast<int>(w.sections.size())) return w.clicked_section;
             // At the end of the page the last sections cannot scroll to the top; then the last section
             // whose heading is on screen counts as current.
             const bool at_end = w.scroll >= w.page_h - view_height() - 2;
@@ -1157,6 +1159,7 @@ namespace bt::ui::config_window {
         void scroll_to(const string& id) {
             for(auto& sec : w.sections) {
                 if(sec.id == id) {
+                    w.clicked_section = static_cast<int>(&sec - w.sections.data());
                     set_scroll(sec.y - S(12));
                     return;
                 }
@@ -1285,6 +1288,7 @@ namespace bt::ui::config_window {
             w.glyphs.clear();
             w.bitmaps.clear();
             w.sections.clear();
+            w.clicked_section = -1;     // indexes may change
             w.next_id = 1000;
             if(w.tooltip) ::DestroyWindow(w.tooltip);
             w.tooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
@@ -1376,6 +1380,7 @@ namespace bt::ui::config_window {
                         set_nav_scroll(w.nav_scroll - delta * S(72) / WHEEL_DELTA);
                         return 0;
                     }
+                    w.clicked_section = -1;
                     set_scroll(w.scroll - delta * S(120) / WHEEL_DELTA);
                     return 0;
                 }
@@ -1394,6 +1399,7 @@ namespace bt::ui::config_window {
                         case SB_BOTTOM: y = w.page_h; break;
                         default: break;
                     }
+                    w.clicked_section = -1;
                     set_scroll(y);
                     return 0;
                 }
@@ -1494,6 +1500,8 @@ namespace bt::ui::config_window {
                     if(pt.y >= nav_top()) {
                         for(const nav_item& it : nav_items()) {
                             if(::PtInRect(&it.r, pt)) {
+                                // sections near the end cannot scroll to the top; keep the clicked one highlighted
+                                w.clicked_section = it.section;
                                 set_scroll(w.sections[it.section].y - S(12));
                                 break;
                             }
