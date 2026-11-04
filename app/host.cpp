@@ -425,6 +425,8 @@ namespace bt::host {
     }
 
     void state_changed(bool reload_pipeline) {
+        // the picker points into g_state.browsers; any edit may move what it points to
+        if(picker.visible()) picker.cancel();
         if(reload_pipeline) g_pipeline.load();
         save_pending = true;
         ::SetTimer(wnd, SAVE_TIMER, 400, nullptr);
