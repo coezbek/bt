@@ -36,6 +36,7 @@ namespace bt::ui {
         constexpr wchar_t GLYPH_SETTINGS[] = L"";
         constexpr wchar_t GLYPH_CHECK[] = L"\uE73E";
         constexpr UINT_PTR SHIFT_TIMER = 1;
+        constexpr UINT WM_APP_FOCUS_SELF = WM_APP + 30;
 
         // what the remember section can match; Host is the default
         enum remember_kind : int { kind_host = 0, kind_regex, kind_url, kind_title, kind_process };
@@ -524,6 +525,11 @@ namespace bt::ui {
     }
 
     void picker::on_command(int id, int code) {
+        // a click on an owner-drawn button moves the focus to it, and Esc, Enter or digits would then
+        // go nowhere; the picker keeps the keyboard
+        const bool button = id == ID_TRACKERS || id == ID_RULE || id == ID_REMEMBER;
+        if(button && (code == BN_CLICKED || code == BN_DOUBLECLICKED)) ::SetFocus(wnd);
+        if(id == ID_REMEMBER_KIND && code == CBN_CLOSEUP) ::PostMessageW(wnd, WM_APP_FOCUS_SELF, 0, 0);
         switch(id) {
             case ID_TRACKERS:
                 set_clipboard_text(wnd, cp.raw_url);
@@ -835,6 +841,9 @@ namespace bt::ui {
                 return 0;
             case WM_TIMER:
                 if(w == SHIFT_TIMER) poll_shift();
+                return 0;
+            case WM_APP_FOCUS_SELF:
+                ::SetFocus(wnd);
                 return 0;
             case WM_APP_PARK:
                 if(cloaked) park();   // a new show() may have happened in between
