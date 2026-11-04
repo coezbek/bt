@@ -7,16 +7,23 @@
 [![](https://www.aloneguid.uk/projects/bt/one.png)](https://www.aloneguid.uk/projects/bt/)
 
 
-## This fork: Win32 build
+## About this fork
 
-This branch is a Windows-only rework built for speed. Browser Tamer stays resident in the background
-and shows a native Win32 picker in well under 80 ms after a click. See [release notes](release-notes.md#700).
+This is a fork of [Browser Tamer](https://github.com/aloneguid/bt) by @aloneguid with three changes:
 
-- `bt.exe` with a URL: route the link (forwarded to the background instance).
+- **Native Win32.** Picker, toast and settings are plain Win32 windows. ImGui and DirectX are gone, and the build is Windows only.
+- **Much faster.** The picker opens in about 35 ms instead of 160-300 ms (time from launching `bt.exe` to the picker on screen, measured on the same machine). Browser Tamer stays resident in the background and each click only hands the link over.
+- **Foreground fixes.** The picker comes to the front even while a modifier key is still held, and the browser a link opens in comes to the front instead of only flashing in the taskbar.
+
+Command line:
+
+- `bt.exe <url>`: route the link.
 - `bt.exe pick <url>`: always show the picker.
 - `bt.exe`: open settings.
 - `bt.exe --background`: start the background instance only; `bt.exe --exit`: stop it.
 - `bt.exe browser list | get default | set default <browser>.<profile>`: console commands.
+
+See the [release notes](release-notes.md#700) for details.
 
 ## Raising an Issue
 

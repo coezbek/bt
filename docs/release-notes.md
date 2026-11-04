@@ -1,6 +1,6 @@
 ## 7.0.0
 
-Windows-only rework for speed. The picker now shows in about 30-70 ms after a click, down from several hundred.
+Windows-only rework for speed. The picker now shows in about 35 ms instead of 160-300 ms (launch to picker on screen, same machine).
 
 ### How it works now
 - Browser Tamer runs in the background. It starts at Windows sign-in (option "Run at Windows sign-in") or on the first click. Each later click starts a tiny `bt.exe` that hands the link to the running instance and exits.
