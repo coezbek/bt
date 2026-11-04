@@ -1,5 +1,7 @@
 ## 7.0.0
 
+Renamed to **Browser Torero**, a fork of Browser Tamer by Ivan G. Config folder, install folder and the Windows default-browser registration keep the Browser Tamer names, so it installs over Browser Tamer and keeps your setup. New red logo.
+
 Windows-only rework for speed. The picker now shows in about 35 ms instead of 160-300 ms (launch to picker on screen, same machine).
 
 ### How it works now
@@ -10,8 +12,9 @@ Windows-only rework for speed. The picker now shows in about 35 ms instead of 16
 
 ### Changes
 - All UI is native Win32: picker, toast and settings. ImGui, DirectX and the `grey` UI library are gone; only grey's small non-UI helpers remain, in `common/`.
-- Settings window: browsers and profiles in a tree, rules in a list with an editor dialog, options in a dialog with General, Picker, Toast and Transforms tabs. Script editor, substitutions and pipeline debugger are separate windows.
-- The picker's settings button opens the Picker options instead of an in-picker panel.
+- Settings window in the Windows 11 style: one scrolling page of cards with navigation on the left (browsers with their profile icons, and the profiles of the browser in view). Browsers, profiles and rules are edited inline; rules show icons for what they match. No title bar. Script editor, substitutions and pipeline debugger are separate windows.
+- Picker: hold Shift (or press R) to remember the choice as a rule for the profile you pick.
+- The picker opens at the click, with the first profile under the mouse. Its settings button opens the settings window.
 - Picker: a tile opens on a full click only, so a mouse release left over from the original click cannot pick a browser.
 - Firefox container colours are read correctly (they were all drawn white).
 - Linux and macOS builds are dropped on this branch.
