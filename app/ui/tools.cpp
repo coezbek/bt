@@ -93,7 +93,28 @@ namespace bt::ui {
 
             HWND wnd = create_window(WS_EX_DLGMODALFRAME, WS_POPUP | WS_CAPTION | WS_SYSMENU, title, owner,
                 pos.x, pos.y, w, h,
-                [ctx, validate](HWND hwnd, UINT m, WPARAM wp, LPARAM lp) -> optional<LRESULT> {
+                [ctx, validate, dpi](HWND hwnd, UINT m, WPARAM wp, LPARAM lp) -> optional<LRESULT> {
+                    if(m == WM_PAINT) {
+                        // white body with the fields, grey button bar at the bottom
+                        PAINTSTRUCT ps;
+                        HDC hdc = ::BeginPaint(hwnd, &ps);
+                        RECT rc;
+                        ::GetClientRect(hwnd, &rc);
+                        ::FillRect(hdc, &rc, static_cast<HBRUSH>(::GetStockObject(WHITE_BRUSH)));
+                        static HBRUSH bar = ::CreateSolidBrush(RGB(243, 243, 243));
+                        static HBRUSH line = ::CreateSolidBrush(RGB(229, 229, 229));
+                        RECT b{0, rc.bottom - scale(56, dpi), rc.right, rc.bottom};
+                        ::FillRect(hdc, &b, bar);
+                        RECT l{0, b.top, rc.right, b.top + 1};
+                        ::FillRect(hdc, &l, line);
+                        if(ctx->f) ctx->f->paint(hdc);
+                        ::EndPaint(hwnd, &ps);
+                        return 0;
+                    }
+                    if(m == WM_CTLCOLORBTN) {
+                        static HBRUSH bar = ::CreateSolidBrush(RGB(243, 243, 243));
+                        return reinterpret_cast<LRESULT>(bar);
+                    }
                     if(m == WM_COMMAND) {
                         if(LOWORD(wp) == IDOK) {
                             if(!validate || validate()) {
@@ -129,7 +150,7 @@ namespace bt::ui {
 
             HWND ok = child(wnd, L"Button", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 0, IDOK, dpi);
             HWND cancel = child(wnd, L"Button", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 0, IDCANCEL, dpi);
-            const int bw = scale(88, dpi), bh = scale(28, dpi), m = scale(12, dpi);
+            const int bw = scale(96, dpi), bh = scale(32, dpi), m = scale(12, dpi);
             ::MoveWindow(cancel, rc.right - m - bw, rc.bottom - m - bh, bw, bh, FALSE);
             ::MoveWindow(ok, rc.right - m * 2 - bw * 2 + scale(6, dpi), rc.bottom - m - bh, bw, bh, FALSE);
 
@@ -147,7 +168,7 @@ namespace bt::ui {
     bool edit_rule(HWND owner, const browser& b, match_rule& rule) {
         auto tmp = make_shared<match_rule>(rule);
         const bool frameless = b.supports_frameless_windows();
-        bool ok = form_dialog(owner, "Rule", 520, 330, [tmp, frameless](form& f, function<void()> rebuild) {
+        bool ok = form_dialog(owner, "Rule", 540, 400, [tmp, frameless](form& f, function<void()> rebuild) {
             f.combo("Match", {"URL", "Window title", "Process name", strings::LuaScript},
                 [tmp] { return static_cast<int>(tmp->loc); },
                 [tmp, rebuild](int i) {
@@ -203,7 +224,7 @@ namespace bt::ui {
     bool add_browser(HWND owner) {
         auto b = make_shared<browser>("", "");
         auto error = make_shared<string>();
-        return form_dialog(owner, "Add custom browser", 560, 330, [b, error](form& f, function<void()> rebuild) {
+        return form_dialog(owner, "Add custom browser", 600, 420, [b, error](form& f, function<void()> rebuild) {
             f.text("Name", b->name);
             f.combo("Engine", {"Generic", "Chromium based", "Gecko (Firefox) based"},
                 [b] { return static_cast<int>(b->engine); },
@@ -367,7 +388,7 @@ namespace bt::ui {
         auto edit_one = [](HWND owner_wnd, substitition_state& s) {
             auto tmp = make_shared<substitition_state>(s);
             if(tmp->kind.empty()) tmp->kind = "string";
-            bool ok = form_dialog(owner_wnd, "Substitution", 480, 240, [tmp](form& f, function<void()>) {
+            bool ok = form_dialog(owner_wnd, "Substitution", 500, 280, [tmp](form& f, function<void()>) {
                 f.combo("Kind", {"string", "regex"},
                     [tmp] { return tmp->kind == "regex" ? 1 : 0; },
                     [tmp](int i) { tmp->kind = i == 1 ? "regex" : "string"; });

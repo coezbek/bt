@@ -2,6 +2,8 @@
 #include <format>
 #include <algorithm>
 #include <commctrl.h>
+namespace Gdiplus { using std::min; using std::max; }
+#include <gdiplus.h>
 #include "win32ui.h"
 
 using namespace std;
@@ -28,9 +30,11 @@ namespace bt::ui {
                     wchar_t cls[16]{};
                     ::GetClassNameW(ctl, cls, 16);
                     if(_wcsicmp(cls, L"Edit") == 0) {
-                        // read-only edit
-                        ::SetBkColor(hdc, ::GetSysColor(COLOR_BTNFACE));
-                        return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_BTNFACE));
+                        // read-only edit, inside a light grey field box
+                        static HBRUSH ro = ::CreateSolidBrush(RGB(249, 249, 249));
+                        ::SetTextColor(hdc, RGB(96, 96, 96));
+                        ::SetBkColor(hdc, RGB(249, 249, 249));
+                        return reinterpret_cast<LRESULT>(ro);
                     }
                     ::SetTextColor(hdc, ::GetPropW(ctl, DIM_PROP) ? ::GetSysColor(COLOR_GRAYTEXT) : ::GetSysColor(COLOR_WINDOWTEXT));
                     ::SetBkColor(hdc, ::GetSysColor(COLOR_WINDOW));
@@ -81,7 +85,7 @@ namespace bt::ui {
         y = top;
         width = w;
         label_w = label_width;
-        row_h = scale(24, dpi);
+        row_h = scale(32, dpi);
         gap = scale(5, dpi);
         last_right = x0;
         last_top = y;
@@ -94,6 +98,27 @@ namespace bt::ui {
         }
         controls.clear();
         handlers.clear();
+        boxes.clear();
+    }
+
+    void form::paint(HDC hdc) const {
+        Gdiplus::Graphics g{hdc};
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::Pen border{Gdiplus::Color{255, 211, 211, 211}, 1.0f};
+        Gdiplus::SolidBrush fill{Gdiplus::Color{255, 255, 255, 255}}, fill_ro{Gdiplus::Color{255, 249, 249, 249}};
+        const float r = static_cast<float>(scale(5, dpi));
+        for(const auto& [rc, ro] : boxes) {
+            Gdiplus::GraphicsPath path;
+            const float x = rc.left + 0.5f, y = rc.top + 0.5f, w = static_cast<float>(rc.right - rc.left - 1), h = static_cast<float>(rc.bottom - rc.top - 1);
+            const float d = r * 2;
+            path.AddArc(x, y, d, d, 180, 90);
+            path.AddArc(x + w - d, y, d, d, 270, 90);
+            path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+            path.AddArc(x, y + h - d, d, d, 90, 90);
+            path.CloseFigure();
+            g.FillPath(ro ? &fill_ro : &fill, &path);
+            g.DrawPath(&border, &path);
+        }
     }
 
     void form::next_row(int h) {
@@ -149,10 +174,18 @@ namespace bt::ui {
             make_label(lbl, x0, y, label_w, row_h);
             cx += label_w;
         }
-        HWND h = child(parent, L"Edit", value, ES_AUTOHSCROLL | WS_TABSTOP | (read_only ? ES_READONLY : 0),
-            WS_EX_CLIENTEDGE, id, dpi);
+        // a borderless one-line edit centred in a rounded box that paint() draws
+        HWND h = child(parent, L"Edit", value, ES_AUTOHSCROLL | WS_TABSTOP | (read_only ? ES_READONLY : 0), 0, id, dpi);
         const int right = x0 + width - (reserve ? scale(reserve, dpi) : 0);
-        ::MoveWindow(h, cx, y, right - cx, row_h, FALSE);
+        boxes.push_back({{cx, y, right, y + row_h}, read_only});
+        TEXTMETRICW tm{};
+        HDC hdc = ::GetDC(h);
+        HGDIOBJ old = ::SelectObject(hdc, ui_font(dpi));
+        ::GetTextMetricsW(hdc, &tm);
+        ::SelectObject(hdc, old);
+        ::ReleaseDC(h, hdc);
+        const int inset = scale(8, dpi);
+        ::MoveWindow(h, cx + inset, y + (row_h - tm.tmHeight) / 2, right - cx - inset * 2, tm.tmHeight, FALSE);
         controls.push_back(h);
         string* v = &value;
         handlers[id] = [this, h, v, changed](int code) {
@@ -220,7 +253,10 @@ namespace bt::ui {
             cx += label_w;
         }
         HWND h = child(parent, L"ComboBox", "", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 0, id, dpi);
-        ::MoveWindow(h, cx, y, min(scale(260, dpi), x0 + width - cx), scale(300, dpi), FALSE);
+        RECT wr{};
+        ::GetWindowRect(h, &wr);
+        const int closed_h = wr.bottom - wr.top;
+        ::MoveWindow(h, cx, y + (row_h - closed_h) / 2, min(scale(260, dpi), x0 + width - cx), scale(300, dpi), FALSE);
         for(auto& s : items) ::SendMessageW(h, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide(s).c_str()));
         ::SendMessageW(h, CB_SETCURSEL, get(), 0);
         controls.push_back(h);

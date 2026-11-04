@@ -58,6 +58,11 @@ namespace bt::ui {
         [[nodiscard]] UINT get_dpi() const { return dpi; }
         bool on_command(WPARAM w, LPARAM l);
 
+        /**
+         * @brief Draws the rounded boxes behind text fields. Call from the parent's WM_PAINT.
+         */
+        void paint(HDC hdc) const;
+
     private:
         HWND parent;
         UINT dpi{96};
@@ -67,6 +72,7 @@ namespace bt::ui {
         int last_right{0}, last_top{0};
         bool updating{false};
         std::vector<HWND> controls;
+        std::vector<std::pair<RECT, bool>> boxes;   // field box, read-only
         std::map<int, std::function<void(int code)>> handlers;
 
         int new_id() { return next_id++; }
