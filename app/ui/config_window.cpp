@@ -115,7 +115,20 @@ namespace bt::ui::config_window {
             int profile{-1};    // profile anchors are listed in the navigation only under the current browser
         };
 
-        enum class ctl_kind { toggle, glyph_button, other };
+        enum class ctl_kind { toggle, glyph_button, push_button, other };
+
+        /**
+         * @brief A switch or button painted on the page. Hundreds of child windows made the page slow to
+         * build (about 1.5 ms each) and to scroll, so only text fields and combo boxes are real windows.
+         */
+        struct painted_control {
+            ctl_kind kind;
+            RECT r;
+            function<bool()> get;       // switch state
+            wstring label;              // glyph or button text
+            function<void()> click;
+            bool enabled{true};
+        };
 
         struct control_info {
             ctl_kind kind{ctl_kind::other};
@@ -139,6 +152,8 @@ namespace bt::ui::config_window {
             vector<bitmap_item> bitmaps;
             vector<section_t> sections;
             vector<HWND> controls;
+            vector<painted_control> painted;
+            int hot{-1}, pressed{-1};   // painted control under the mouse / being pressed
             map<int, control_info> infos;
             int next_id{1000};
             vector<system_check> health;
@@ -150,6 +165,7 @@ namespace bt::ui::config_window {
         void request_rebuild() { ::PostMessageW(w.wnd, WM_APP_REBUILD, 0, 0); }
 
         void changed() { host::state_changed(); }
+        void draw_painted(HDC hdc, const painted_control& c, bool hot, bool pressed);
 
         // ---- page builder
 
@@ -266,26 +282,35 @@ namespace bt::ui::config_window {
         }
 
         /**
+         * @brief Adds a painted control, with a rectangle tooltip on the page window.
+         */
+        void add_painted(painted_control c, const string& tooltip = "") {
+            w.painted.push_back(std::move(c));
+            if(tooltip.empty()) return;
+            wstring text = wide(tooltip);
+            TOOLINFOW ti{};
+            ti.cbSize = sizeof(ti);
+            ti.uFlags = TTF_SUBCLASS;
+            ti.hwnd = w.page;
+            ti.uId = w.painted.size();
+            ti.rect = w.painted.back().r;
+            ti.lpszText = text.data();
+            ::SendMessageW(w.tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+        }
+
+        /**
          * @brief A Windows 11 style on/off switch, right-aligned in the control area.
          */
-        HWND toggle(RECT area, function<bool()> get, function<void(bool)> set) {
+        void toggle(RECT area, function<bool()> get, function<void(bool)> set) {
             const int tw = S(96), th = S(28);
             RECT r{area.right - tw, area.top + (area.bottom - area.top - th) / 2, area.right, 0};
             r.bottom = r.top + th;
-            control_info info;
-            info.kind = ctl_kind::toggle;
-            info.get = get;
-            info.on = [get, set](int code) {
-                // owner-drawn buttons report a fast second click as BN_DOUBLECLICKED
-                if(code == BN_CLICKED || code == BN_DOUBLECLICKED) set(!get());
-            };
-            HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
-            return h;
+            add_painted({ctl_kind::toggle, r, get, L"", [get, set] { set(!get()); }});
         }
 
-        HWND toggle(RECT area, bool& value, function<void()> after = changed) {
+        void toggle(RECT area, bool& value, function<void()> after = changed) {
             bool* v = &value;
-            return toggle(area, [v] { return *v; }, [v, after](bool b) {
+            toggle(area, [v] { return *v; }, [v, after](bool b) {
                 *v = b;
                 if(after) after();
             });
@@ -294,50 +319,44 @@ namespace bt::ui::config_window {
         /**
          * @brief A small square button showing a glyph. Buttons are laid out right to left.
          */
-        HWND glyph_button(int& right, int top, int bottom, const wchar_t* glyph, const string& tooltip,
+        void glyph_button(int& right, int top, int bottom, const wchar_t* glyph, const string& tooltip,
             function<void()> click, bool enabled = true) {
             const int bw = S(32);
             RECT r{right - bw, top + (bottom - top - bw) / 2, right, 0};
             r.bottom = r.top + bw;
             right -= bw + S(4);
-            control_info info;
-            info.kind = ctl_kind::glyph_button;
-            info.glyph = glyph;
-            info.on = [click](int code) {
-                if((code == BN_CLICKED || code == BN_DOUBLECLICKED) && click) click();
-            };
-            HWND h = add_control(L"Button", "", BS_OWNERDRAW | WS_TABSTOP, r, info);
-            ::EnableWindow(h, enabled);
-            tip(h, tooltip);
-            return h;
+            add_painted({ctl_kind::glyph_button, r, {}, glyph, std::move(click), enabled}, tooltip);
         }
 
         int text_px(const string& s) {
-            HDC hdc = ::GetDC(nullptr);
-            HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
+            // one memory DC for all measuring; GetDC per call added up over hundreds of rows
+            static HDC dc = ::CreateCompatibleDC(nullptr);
+            ::SelectObject(dc, ui_font(w.dpi));
             SIZE sz{};
             wstring ws = wide(s);
-            ::GetTextExtentPoint32W(hdc, ws.c_str(), static_cast<int>(ws.size()), &sz);
-            ::SelectObject(hdc, old);
-            ::ReleaseDC(nullptr, hdc);
+            ::GetTextExtentPoint32W(dc, ws.c_str(), static_cast<int>(ws.size()), &sz);
             return sz.cx;
+        }
+
+        int text_height() {
+            static map<UINT, int> cache;
+            if(auto it = cache.find(w.dpi); it != cache.end()) return it->second;
+            static HDC dc = ::CreateCompatibleDC(nullptr);
+            ::SelectObject(dc, ui_font(w.dpi));
+            TEXTMETRICW tm{};
+            ::GetTextMetricsW(dc, &tm);
+            return cache[w.dpi] = tm.tmHeight;
         }
 
         /**
          * @brief A push button; laid out right to left like glyph buttons.
          */
-        HWND push_button(int& right, int top, int bottom, const string& text, function<void()> click, bool enabled = true) {
+        void push_button(int& right, int top, int bottom, const string& text, function<void()> click, bool enabled = true) {
             const int bw = max(S(88), text_px(text) + S(28)), bh = S(32);
             RECT r{right - bw, top + (bottom - top - bh) / 2, right, 0};
             r.bottom = r.top + bh;
             right -= bw + S(6);
-            control_info info;
-            info.on = [click](int code) {
-                if(code == BN_CLICKED && click) click();
-            };
-            HWND h = add_control(L"Button", text, BS_PUSHBUTTON | WS_TABSTOP, r, info);
-            ::EnableWindow(h, enabled);
-            return h;
+            add_painted({ctl_kind::push_button, r, {}, wide(text), std::move(click), enabled});
         }
 
         /**
@@ -348,15 +367,7 @@ namespace bt::ui::config_window {
             RECT box{area.left, area.top + (area.bottom - area.top - bh) / 2, area.right, 0};
             box.bottom = box.top + bh;
             (read_only ? w.ro_fields : w.fields).push_back(box);
-            const int text_h = [] {
-                HDC hdc = ::GetDC(nullptr);
-                HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
-                TEXTMETRICW tm{};
-                ::GetTextMetricsW(hdc, &tm);
-                ::SelectObject(hdc, old);
-                ::ReleaseDC(nullptr, hdc);
-                return static_cast<int>(tm.tmHeight);
-            }();
+            const int text_h = text_height();
             RECT r{box.left + S(10), box.top + (bh - text_h) / 2, box.right - S(10), 0};
             r.bottom = r.top + text_h;
             string* v = &value;
@@ -380,14 +391,8 @@ namespace bt::ui::config_window {
             RECT box{r.left, r.top + (r.bottom - r.top - bh) / 2, r.right, 0};
             box.bottom = box.top + bh;
             w.fields.push_back(box);
-            HDC hdc = ::GetDC(nullptr);
-            HGDIOBJ old = ::SelectObject(hdc, ui_font(w.dpi));
-            TEXTMETRICW tm{};
-            ::GetTextMetricsW(hdc, &tm);
-            ::SelectObject(hdc, old);
-            ::ReleaseDC(nullptr, hdc);
-            RECT er{box.left + S(10), box.top + (bh - tm.tmHeight) / 2, box.right - S(10), 0};
-            er.bottom = er.top + tm.tmHeight;
+            RECT er{box.left + S(10), box.top + (bh - text_height()) / 2, box.right - S(10), 0};
+            er.bottom = er.top + text_height();
             T* v = &value;
             auto handle = make_shared<HWND>();
             control_info info;
@@ -953,6 +958,11 @@ namespace bt::ui::config_window {
                 if(bm.y > clip.bottom || bm.y + S(64) < clip.top) continue;
                 icons::draw(hdc, bm.bmp, bm.x, bm.y);
             }
+            for(int i = 0; i < static_cast<int>(w.painted.size()); i++) {
+                const auto& c = w.painted[i];
+                if(c.r.bottom < clip.top || c.r.top > clip.bottom) continue;
+                draw_painted(hdc, c, i == w.hot, i == w.pressed && i == w.hot);
+            }
 
             ::SetViewportOrgEx(hdc, 0, 0, nullptr);
             ::BitBlt(target, clip.left, clip.top, cw, ch, hdc, 0, 0, SRCCOPY);
@@ -961,76 +971,76 @@ namespace bt::ui::config_window {
             ::DeleteDC(hdc);
         }
 
-        void draw_control(const DRAWITEMSTRUCT& di) {
-            auto it = w.infos.find(static_cast<int>(di.CtlID));
-            if(it == w.infos.end()) return;
-            const control_info& info = it->second;
-            // draw into a buffer and copy once, so the control never shows a half-drawn state
-            const RECT target = di.rcItem;
-            const int bw = target.right - target.left, bh = target.bottom - target.top;
-            HDC hdc = ::CreateCompatibleDC(di.hDC);
-            HBITMAP buf = ::CreateCompatibleBitmap(di.hDC, bw, bh);
-            HGDIOBJ old_buf = ::SelectObject(hdc, buf);
-            RECT rc{0, 0, bw, bh};
-            ::FillRect(hdc, &rc, brush(C_CARD));
-            const bool disabled = di.itemState & ODS_DISABLED;
-            const bool pressed = di.itemState & ODS_SELECTED;
-            const bool focus = di.itemState & ODS_FOCUS;
+        void draw_painted(HDC hdc, const painted_control& c, bool hot, bool pressed) {
+            const RECT rc = c.r;
+            ::SetBkMode(hdc, TRANSPARENT);
+            auto fill_round = [&](const RECT& r, float radius, COLORREF fill, const COLORREF* border) {
+                // GDI+ shapes first, in their own scope; GDI text drawn while a Graphics object holds the
+                // DC gets painted over when it flushes
+                Gdiplus::Graphics g{hdc};
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                Gdiplus::GraphicsPath path;
+                rounded(path, r.left + 0.5f, r.top + 0.5f, static_cast<float>(r.right - r.left - 1), static_cast<float>(r.bottom - r.top - 1), radius);
+                Gdiplus::SolidBrush b{gp(fill)};
+                g.FillPath(&b, &path);
+                if(border) {
+                    Gdiplus::Pen pen{gp(*border), 1.0f};
+                    g.DrawPath(&pen, &path);
+                }
+            };
+            auto text = [&](const wchar_t* t, RECT r, HFONT f, COLORREF col, UINT flags) {
+                ::SetTextColor(hdc, col);
+                HGDIOBJ of = ::SelectObject(hdc, f);
+                ::DrawTextW(hdc, t, -1, &r, flags | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                ::SelectObject(hdc, of);
+            };
 
-            if(info.kind == ctl_kind::toggle) {
-                const bool on = info.get && info.get();
-                const int sw = S(40), sh = S(20);
-                const int sx = rc.right - sw - S(2), sy = rc.top + (rc.bottom - rc.top - sh) / 2;
-                {
-                    Gdiplus::Graphics g{hdc};
-                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                    Gdiplus::GraphicsPath track;
-                    rounded(track, sx + 0.5f, sy + 0.5f, static_cast<float>(sw - 1), static_cast<float>(sh - 1), (sh - 1) / 2.0f);
-                    if(on) {
-                        Gdiplus::SolidBrush fill{gp(C_ACCENT)};
-                        g.FillPath(&fill, &track);
-                    } else {
-                        Gdiplus::SolidBrush fill{gp(C_CARD)};
-                        Gdiplus::Pen pen{gp(RGB(134, 134, 134)), 1.0f};
-                        g.FillPath(&fill, &track);
-                        g.DrawPath(&pen, &track);
+            switch(c.kind) {
+                case ctl_kind::toggle: {
+                    const bool on = c.get && c.get();
+                    const int sw = S(40), sh = S(20);
+                    const int sx = rc.right - sw - S(2), sy = rc.top + (rc.bottom - rc.top - sh) / 2;
+                    const RECT track{sx, sy, sx + sw, sy + sh};
+                    const COLORREF grey = RGB(134, 134, 134);
+                    if(on) fill_round(track, (sh - 1) / 2.0f, hot ? RGB(25, 117, 197) : C_ACCENT, nullptr);
+                    else fill_round(track, (sh - 1) / 2.0f, hot ? RGB(243, 243, 243) : C_CARD, &grey);
+                    {
+                        Gdiplus::Graphics g{hdc};
+                        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                        const float knob = sh * (pressed ? 0.62f : hot ? 0.56f : 0.5f);
+                        const float kx = on ? sx + sw - sh / 2.0f - knob / 2 : sx + sh / 2.0f - knob / 2;
+                        const float ky = sy + sh / 2.0f - knob / 2;
+                        Gdiplus::SolidBrush kb{on ? Gdiplus::Color{255, 255, 255, 255} : gp(RGB(95, 95, 95))};
+                        g.FillEllipse(&kb, kx, ky, knob, knob);
                     }
-                    const float knob = sh * (pressed ? 0.6f : 0.5f);
-                    const float kx = on ? sx + sw - sh / 2.0f - knob / 2 : sx + sh / 2.0f - knob / 2;
-                    const float ky = sy + sh / 2.0f - knob / 2;
-                    Gdiplus::SolidBrush kb{on ? Gdiplus::Color{255, 255, 255, 255} : gp(RGB(95, 95, 95))};
-                    g.FillEllipse(&kb, kx, ky, knob, knob);
+                    text(on ? L"On" : L"Off", {rc.left, rc.top, sx - S(10), rc.bottom}, ui_font(w.dpi), C_TEXT, DT_RIGHT);
+                    break;
                 }
-                RECT tr{rc.left, rc.top, sx - S(10), rc.bottom};
-                ::SetBkMode(hdc, TRANSPARENT);
-                ::SetTextColor(hdc, C_TEXT);
-                HGDIOBJ of = ::SelectObject(hdc, ui_font(w.dpi));
-                ::DrawTextW(hdc, on ? L"On" : L"Off", -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-                ::SelectObject(hdc, of);
-            } else if(info.kind == ctl_kind::glyph_button) {
-                if(pressed) {
-                    Gdiplus::Graphics g{hdc};
-                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                    Gdiplus::GraphicsPath path;
-                    rounded(path, rc.left + 0.5f, rc.top + 0.5f, static_cast<float>(rc.right - rc.left - 1), static_cast<float>(rc.bottom - rc.top - 1), static_cast<float>(S(4)));
-                    Gdiplus::SolidBrush fill{gp(C_NAV_SEL)};
-                    g.FillPath(&fill, &path);
+                case ctl_kind::glyph_button:
+                    if(c.enabled && (hot || pressed)) fill_round(rc, static_cast<float>(S(4)), pressed ? RGB(229, 229, 229) : RGB(240, 240, 240), nullptr);
+                    text(c.label.c_str(), rc, icon_font(w.dpi, 11), c.enabled ? C_TEXT : RGB(190, 190, 190), DT_CENTER);
+                    break;
+                case ctl_kind::push_button: {
+                    const COLORREF fill = !c.enabled ? RGB(249, 249, 249) : pressed ? RGB(240, 240, 240) : hot ? RGB(246, 246, 246) : RGB(253, 253, 253);
+                    const COLORREF border = RGB(208, 208, 208);
+                    fill_round(rc, static_cast<float>(S(4)), fill, &border);
+                    text(c.label.c_str(), rc, ui_font(w.dpi), c.enabled ? (pressed ? C_DIM : C_TEXT) : RGB(160, 160, 160), DT_CENTER);
+                    break;
                 }
-                ::SetBkMode(hdc, TRANSPARENT);
-                ::SetTextColor(hdc, disabled ? RGB(190, 190, 190) : C_TEXT);
-                HGDIOBJ of = ::SelectObject(hdc, icon_font(w.dpi, 11));
-                ::DrawTextW(hdc, info.glyph.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                ::SelectObject(hdc, of);
+                default:
+                    break;
             }
-            if(focus && !(di.itemState & ODS_NOFOCUSRECT)) {
-                RECT fr = rc;
-                ::InflateRect(&fr, -1, -1);
-                ::DrawFocusRect(hdc, &fr);
+        }
+
+        int painted_at(POINT pt) {
+            for(int i = 0; i < static_cast<int>(w.painted.size()); i++) {
+                if(::PtInRect(&w.painted[i].r, pt)) return i;
             }
-            ::BitBlt(di.hDC, target.left, target.top, bw, bh, hdc, 0, 0, SRCCOPY);
-            ::SelectObject(hdc, old_buf);
-            ::DeleteObject(buf);
-            ::DeleteDC(hdc);
+            return -1;
+        }
+
+        void invalidate_painted(int i) {
+            if(i >= 0 && i < static_cast<int>(w.painted.size())) ::InvalidateRect(w.page, &w.painted[i].r, FALSE);
         }
 
         // ---- caption, scrolling and navigation
@@ -1280,6 +1290,8 @@ namespace bt::ui::config_window {
             for(HWND h : w.controls) ::DestroyWindow(h);
             w.controls.clear();
             w.infos.clear();
+            w.painted.clear();
+            w.hot = w.pressed = -1;
             w.cards.clear();
             w.lines.clear();
             w.fields.clear();
@@ -1339,14 +1351,64 @@ namespace bt::ui::config_window {
                     if(it != w.infos.end() && it->second.on) {
                         auto fn = it->second.on;   // the handler may rebuild the page
                         fn(HIWORD(wp));
-                        if(it = w.infos.find(LOWORD(wp)); it != w.infos.end() && it->second.kind == ctl_kind::toggle)
-                            ::InvalidateRect(reinterpret_cast<HWND>(lp), nullptr, FALSE);
                     }
                     return 0;
                 }
-                case WM_DRAWITEM:
-                    draw_control(*reinterpret_cast<DRAWITEMSTRUCT*>(lp));
-                    return TRUE;
+                case WM_MOUSEMOVE: {
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    int i = painted_at(pt);
+                    if(i >= 0 && !w.painted[i].enabled) i = -1;
+                    if(i != w.hot) {
+                        invalidate_painted(w.hot);
+                        w.hot = i;
+                        invalidate_painted(w.hot);
+                        TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, h, 0};
+                        ::TrackMouseEvent(&tme);
+                    }
+                    return 0;
+                }
+                case WM_MOUSELEAVE:
+                    invalidate_painted(w.hot);
+                    w.hot = -1;
+                    return 0;
+                case WM_LBUTTONDOWN:
+                case WM_LBUTTONDBLCLK: {
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    int i = painted_at(pt);
+                    if(i >= 0 && w.painted[i].enabled) {
+                        w.pressed = i;
+                        ::SetCapture(h);
+                        invalidate_painted(i);
+                    }
+                    ::SetFocus(h);   // take the focus off a text field, so its edit is committed
+                    return 0;
+                }
+                case WM_LBUTTONUP: {
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    const int i = w.pressed;
+                    w.pressed = -1;
+                    ::ReleaseCapture();
+                    if(i >= 0 && i < static_cast<int>(w.painted.size())) {
+                        invalidate_painted(i);
+                        if(::PtInRect(&w.painted[i].r, pt) && w.painted[i].click) {
+                            auto fn = w.painted[i].click;   // the click may rebuild the page
+                            fn();
+                            invalidate_painted(i);
+                        }
+                    }
+                    return 0;
+                }
+                case WM_SETCURSOR: {
+                    POINT pt;
+                    ::GetCursorPos(&pt);
+                    ::ScreenToClient(h, &pt);
+                    int i = painted_at(pt);
+                    if(LOWORD(lp) == HTCLIENT && i >= 0 && w.painted[i].enabled) {
+                        ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+                        return TRUE;
+                    }
+                    break;
+                }
                 case WM_CTLCOLOREDIT: {
                     HDC hdc = reinterpret_cast<HDC>(wp);
                     ::SetTextColor(hdc, C_TEXT);
