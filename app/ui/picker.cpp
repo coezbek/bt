@@ -446,10 +446,9 @@ namespace bt::ui {
     void picker::set_remember(bool on, bool manual) {
         if(manual) remember_manual = true;
         remember = on;
-        // the section stays once touched by hand, so the user can uncheck without it vanishing
-        bool open = on || remember_manual;
-        if(open != section_open) {
-            section_open = open;
+        // once shown, the row stays; releasing Shift only unchecks the box
+        if(on && !section_open) {
+            section_open = true;
             relayout_in_place();
         }
         for(HWND h : {rule_check, btn_rule}) ::InvalidateRect(h, nullptr, FALSE);
@@ -473,8 +472,9 @@ namespace bt::ui {
     }
 
     void picker::poll_shift() {
-        // typing a capital letter into the value field must not toggle the checkbox
-        if(remember_manual || ::GetFocus() == rule_value) return;
+        // typing capitals into the URL or value field, or using the combo box, must not toggle the box
+        HWND focus = ::GetFocus();
+        if(remember_manual || (focus && focus != wnd)) return;
         bool down = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         if(down == shift_down) return;
         shift_down = down;
