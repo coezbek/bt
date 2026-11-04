@@ -111,6 +111,8 @@ namespace bt::ui::config_window {
             string title;
             int indent;
             int y;
+            int browser{-1};    // index into g_state.browsers for browser and profile anchors
+            int profile{-1};    // profile anchors are listed in the navigation only under the current browser
         };
 
         enum class ctl_kind { toggle, glyph_button, other };
@@ -441,7 +443,7 @@ namespace bt::ui::config_window {
                 ok &= c.is_ok;
             }
             RECT r = b.row("Default browser",
-                ok ? "Windows sends links to Browser Tamer." : "Windows does not send links to Browser Tamer yet.",
+                ok ? "Windows sends links to " APP_LONG_NAME "." : "Windows does not send links to " APP_LONG_NAME " yet.",
                 0, nullptr, ok ? G_CHECK : G_WARN);
             w.glyphs.back().colour = ok ? C_OK : C_WARN;
             if(!ok) {
@@ -573,6 +575,8 @@ namespace bt::ui::config_window {
             if(p.is_hidden) desc += " · hidden in picker";
 
             const int icon_px = S(32);
+            if(managed) w.sections.push_back({format("profile:{}:{}", &br - g_state.browsers.data(), pi), p.name, 1, b.y,
+                static_cast<int>(&br - g_state.browsers.data()), pi});
             RECT c = b.row(managed ? p.name : "Launch", desc, icon_px,
                 icons::profile_bitmap(br, p, icon_px, icon_overlay_mode::profile_only), nullptr, true);
             int right = c.right;
@@ -667,7 +671,7 @@ namespace bt::ui::config_window {
                 if(br.is_hidden && !g_state.show_hidden_browsers) continue;
                 const bool full = br.management == management_extent::full;
 
-                w.sections.push_back({format("browser:{}", bi), br.name, 1, b.y});
+                w.sections.push_back({format("browser:{}", bi), br.name, 0, b.y, bi, -1});
                 b.begin_card();
                 string engine = br.engine == browser_engine::chromium ? "Chromium based"
                               : br.engine == browser_engine::gecko ? "Gecko based" : "Generic";
@@ -839,11 +843,11 @@ namespace bt::ui::config_window {
                 int right = c.right;
                 push_button(right, c.top, c.bottom, button, fn);
             };
-            tool("Windows default apps", "Make Browser Tamer the default browser", "Open", [] { shell_open("ms-settings:defaultapps"); });
+            tool("Windows default apps", "Make " APP_LONG_NAME " the default browser", "Open", [] { shell_open("ms-settings:defaultapps"); });
             tool(strings::PipelineDebugger, "See how a link is cleaned and which rules match", "Open", [] { show_pipeline_debugger(); });
             tool(strings::ScriptEditor, "Edit scripts.lua", "Open", [] { show_script_editor(); });
             tool("Configuration folder", fss::get_config_dir(CONFIG_NAME), "Open", [] { shell_open(fss::get_config_dir(CONFIG_NAME)); });
-            tool("Exit Browser Tamer", "Stops the background instance until the next click", "Exit", [] {
+            tool("Exit " APP_LONG_NAME, "Stops the background instance until the next click", "Exit", [] {
                 ::DestroyWindow(w.wnd);
                 host::quit();
             });
@@ -853,11 +857,18 @@ namespace bt::ui::config_window {
         void build_about(builder& b) {
             b.section("about", "About");
             b.begin_card();
-            RECT c = b.row(format("{} {}", APP_LONG_NAME, APP_VERSION), "Win32 build, running in the background", S(32),
+            RECT c = b.row(format("{} {}", APP_LONG_NAME, APP_VERSION), "Native Win32, resident in the background, fast", S(32),
                 icons::path_bitmap("logo", S(32), false));
             int right = c.right;
             push_button(right, c.top, c.bottom, "Releases", [] { shell_open(APP_GITHUB_RELEASES_URL); });
-            push_button(right, c.top, c.bottom, "Documentation", [] { shell_open(APP_DOCS_URL); });
+            RECT a = b.row("Based on Browser Tamer by Ivan G (aloneguid)",
+                APP_LONG_NAME " is a fork of Browser Tamer under the Apache 2.0 licence. Thank you, Ivan.");
+            int ar = a.right;
+            push_button(ar, a.top, a.bottom, "Donate", [] { shell_open(APP_DONATE_URL); });
+            push_button(ar, a.top, a.bottom, "Browser Tamer", [] { shell_open(APP_UPSTREAM_URL); });
+            RECT d = b.row("Documentation", "The Browser Tamer manual covers rules, scripting and the command line");
+            int dr = d.right;
+            push_button(dr, d.top, d.bottom, "Open", [] { shell_open(APP_DOCS_URL); });
             string timings = host::timing_summary();
             int lines = static_cast<int>(ranges::count(timings, '\n')) + 1;
             RECT t = b.row("Recent clicks", "Time from click to picker or browser start, newest first", 0, nullptr, nullptr, false,
@@ -1000,16 +1011,37 @@ namespace bt::ui::config_window {
             }
         }
 
-        // ---- scrolling and navigation
+        // ---- caption, scrolling and navigation
 
-        int nav_width() { return S(260); }
-        int nav_item_h() { return S(36); }
+        // The window has no title bar. The top strip is drawn by us: dragging it moves the window and
+        // the three caption buttons sit at its right end.
+        int caption_h() { return S(40); }
+        int nav_width() { return S(272); }
         int nav_top() { return S(84); }
+
+        enum caption_button { cap_none = -1, cap_min = 0, cap_max, cap_close };
+        int cap_hover{cap_none};
+
+        RECT caption_button_rect(int i) {
+            RECT rc;
+            ::GetClientRect(w.wnd, &rc);
+            const int bw = S(46);
+            const int left = rc.right - bw * (3 - i);
+            return {left, 0, left + bw, S(32)};
+        }
+
+        int caption_hit(POINT pt) {
+            for(int i = cap_min; i <= cap_close; i++) {
+                RECT r = caption_button_rect(i);
+                if(::PtInRect(&r, pt)) return i;
+            }
+            return cap_none;
+        }
 
         RECT view_rect() {
             RECT rc;
             ::GetClientRect(w.wnd, &rc);
-            return {nav_width(), 0, rc.right, rc.bottom};
+            return {nav_width(), caption_h(), rc.right, rc.bottom};
         }
 
         int view_height() {
@@ -1023,6 +1055,29 @@ namespace bt::ui::config_window {
                 if(w.sections[i].y <= w.scroll + S(40)) idx = i;
             }
             return idx;
+        }
+
+        struct nav_item {
+            int section;
+            RECT r;
+        };
+
+        /**
+         * @brief Navigation entries: every section and browser, plus the profiles of the browser in view.
+         */
+        vector<nav_item> nav_items() {
+            vector<nav_item> items;
+            const int cur = current_section();
+            const int cur_browser = cur < static_cast<int>(w.sections.size()) ? w.sections[cur].browser : -1;
+            int y = nav_top();
+            for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
+                const auto& sec = w.sections[i];
+                if(sec.profile >= 0 && sec.browser != cur_browser) continue;
+                const int h = sec.profile >= 0 ? S(30) : S(36);
+                items.push_back({i, {S(10), y, nav_width() - S(10), y + h}});
+                y += h;
+            }
+            return items;
         }
 
         void set_scroll(int y) {
@@ -1040,56 +1095,111 @@ namespace bt::ui::config_window {
         }
 
         void scroll_to(const string& id) {
-            for(auto& s : w.sections) {
-                if(s.id == id) {
-                    set_scroll(s.y - S(12));
+            for(auto& sec : w.sections) {
+                if(sec.id == id) {
+                    set_scroll(sec.y - S(12));
                     return;
                 }
             }
         }
 
-        void paint_nav(HDC target) {
+        void fill_rounded(HDC hdc, RECT r, float radius, COLORREF c) {
+            Gdiplus::Graphics g{hdc};
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::GraphicsPath path;
+            rounded(path, static_cast<float>(r.left), static_cast<float>(r.top), static_cast<float>(r.right - r.left),
+                static_cast<float>(r.bottom - r.top), radius);
+            Gdiplus::SolidBrush b{gp(c)};
+            g.FillPath(&b, &path);
+        }
+
+        void paint_window(HDC target) {
             RECT rc;
             ::GetClientRect(w.wnd, &rc);
-            RECT nav{0, 0, nav_width(), rc.bottom};
             HDC hdc = ::CreateCompatibleDC(target);
-            HBITMAP bmp = ::CreateCompatibleBitmap(target, nav.right, nav.bottom);
+            HBITMAP bmp = ::CreateCompatibleBitmap(target, rc.right, max(1L, rc.bottom));
             HGDIOBJ old = ::SelectObject(hdc, bmp);
-            ::FillRect(hdc, &nav, brush(C_BG));
+            ::FillRect(hdc, &rc, brush(C_BG));
             ::SetBkMode(hdc, TRANSPARENT);
 
-            // app title
-            icons::draw(hdc, icons::path_bitmap("logo", S(28), false), S(20), S(24));
+            // app title, in the draggable strip
+            icons::draw(hdc, icons::path_bitmap("logo", S(28), false), S(22), S(26));
             HGDIOBJ of = ::SelectObject(hdc, ui_font(w.dpi, 3, true));
             ::SetTextColor(hdc, C_TEXT);
-            RECT tr{S(58), S(20), nav.right - S(8), S(56)};
-            ::DrawTextW(hdc, L"Browser Tamer", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            RECT tr{S(60), S(22), nav_width() - S(8), S(58)};
+            ::DrawTextW(hdc, wide(APP_LONG_NAME).c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+            // navigation
             const int cur = current_section();
-            int y = nav_top();
-            for(int i = 0; i < static_cast<int>(w.sections.size()); i++) {
-                const auto& s = w.sections[i];
-                RECT item{S(10), y, nav.right - S(10), y + nav_item_h()};
-                if(i == cur) {
-                    Gdiplus::Graphics g{hdc};
-                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                    Gdiplus::GraphicsPath path;
-                    rounded(path, static_cast<float>(item.left), static_cast<float>(item.top + S(2)),
-                        static_cast<float>(item.right - item.left), static_cast<float>(nav_item_h() - S(4)), static_cast<float>(S(5)));
-                    Gdiplus::SolidBrush sel{gp(C_NAV_SEL)};
-                    g.FillPath(&sel, &path);
-                    Gdiplus::SolidBrush bar{gp(C_ACCENT)};
-                    g.FillRectangle(&bar, static_cast<float>(item.left), item.top + nav_item_h() * 0.3f, static_cast<float>(S(3)), nav_item_h() * 0.4f);
+            for(const nav_item& it : nav_items()) {
+                const auto& sec = w.sections[it.section];
+                RECT item = it.r;
+                const bool profile = sec.profile >= 0;
+                const bool active = it.section == cur ||
+                    (!profile && sec.browser >= 0 && cur < static_cast<int>(w.sections.size()) && w.sections[cur].browser == sec.browser);
+                if(active) {
+                    RECT hr = item;
+                    hr.top += S(2);
+                    hr.bottom -= S(2);
+                    fill_rounded(hdc, hr, static_cast<float>(S(5)), it.section == cur ? C_NAV_SEL : RGB(238, 238, 238));
+                    if(it.section == cur) {
+                        RECT bar{item.left, item.top + (item.bottom - item.top) * 3 / 10, item.left + S(3), item.bottom - (item.bottom - item.top) * 3 / 10};
+                        fill_rounded(hdc, bar, static_cast<float>(S(1)), C_ACCENT);
+                    }
                 }
-                RECT t{item.left + S(14) + s.indent * S(16), item.top, item.right - S(6), item.bottom};
-                ::SelectObject(hdc, s.indent ? ui_font(w.dpi) : ui_font(w.dpi, 1));
-                ::SetTextColor(hdc, s.indent ? C_DIM : C_TEXT);
-                wstring title = wide(s.title);
+                int x = item.left + S(14) + (profile ? S(22) : 0);
+                const int mid = (item.top + item.bottom) / 2;
+                const browser* br = sec.browser >= 0 && sec.browser < static_cast<int>(g_state.browsers.size())
+                    ? &g_state.browsers[sec.browser] : nullptr;
+                if(br && !profile) {
+                    const int ip = S(18);
+                    icons::draw(hdc, icons::path_bitmap(br->get_best_icon_path(), ip, false), x, mid - ip / 2);
+                    x += ip + S(10);
+                } else if(br && profile && sec.profile < static_cast<int>(br->profiles.size())) {
+                    const int ip = S(18);
+                    icons::draw(hdc, icons::profile_bitmap(*br, br->profiles[sec.profile], ip, icon_overlay_mode::profile_only), x, mid - ip / 2);
+                    x += ip + S(8);
+                }
+
+                // after a browser's name: its profiles' icons, small, as many as fit
+                int text_right = item.right - S(6);
+                if(br && !profile && br->management != management_extent::none) {
+                    const int sp = S(14), gap = S(2);
+                    int count = 0;
+                    for(auto& p : br->profiles) if(!p.is_hidden || g_state.show_hidden_browsers) count++;
+                    const int max_icons = 5;
+                    const int shown = min(count, max_icons);
+                    int ix = item.right - S(8) - shown * (sp + gap);
+                    text_right = ix - S(4);
+                    int n = 0;
+                    for(auto& p : br->profiles) {
+                        if(p.is_hidden && !g_state.show_hidden_browsers) continue;
+                        if(n++ >= max_icons) break;
+                        icons::draw(hdc, icons::profile_bitmap(*br, p, sp, icon_overlay_mode::profile_only), ix, mid - sp / 2);
+                        ix += sp + gap;
+                    }
+                }
+
+                RECT t{x, item.top, text_right, item.bottom};
+                ::SelectObject(hdc, profile ? ui_font(w.dpi, -1) : ui_font(w.dpi, 1));
+                ::SetTextColor(hdc, profile ? C_DIM : C_TEXT);
+                wstring title = wide(sec.title);
                 ::DrawTextW(hdc, title.c_str(), -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-                y += nav_item_h();
             }
+
+            // caption buttons
+            const bool zoomed = ::IsZoomed(w.wnd);
+            const wchar_t* glyphs[] = {L"\uE921", zoomed ? L"\uE923" : L"\uE922", L"\uE8BB"};
+            for(int i = cap_min; i <= cap_close; i++) {
+                RECT r = caption_button_rect(i);
+                if(i == cap_hover) ::FillRect(hdc, &r, brush(i == cap_close ? RGB(196, 43, 28) : RGB(229, 229, 229)));
+                ::SelectObject(hdc, icon_font(w.dpi, 7));
+                ::SetTextColor(hdc, i == cap_hover && i == cap_close ? RGB(255, 255, 255) : C_TEXT);
+                ::DrawTextW(hdc, glyphs[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
             ::SelectObject(hdc, of);
-            ::BitBlt(target, 0, 0, nav.right, nav.bottom, hdc, 0, 0, SRCCOPY);
+            ::BitBlt(target, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
             ::SelectObject(hdc, old);
             ::DeleteObject(bmp);
             ::DeleteDC(hdc);
@@ -1232,12 +1342,13 @@ namespace bt::ui::config_window {
                 case WM_PAINT: {
                     PAINTSTRUCT ps;
                     HDC hdc = ::BeginPaint(hwnd, &ps);
-                    paint_nav(hdc);
+                    paint_window(hdc);
                     ::EndPaint(hwnd, &ps);
                     return 0;
                 }
                 case WM_SIZE:
                     if(w.view) layout();
+                    ::InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case WM_GETMINMAXINFO: {
                     auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
@@ -1251,11 +1362,62 @@ namespace bt::ui::config_window {
                     ::SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
                     return 0;
                 }
+                case WM_NCCALCSIZE:
+                    if(wp) {
+                        // keep the side and bottom frame for resizing, drop the title bar
+                        auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lp);
+                        const int top = p->rgrc[0].top;
+                        ::DefWindowProcW(hwnd, m, wp, lp);
+                        p->rgrc[0].top = top;
+                        if(::IsZoomed(hwnd)) {
+                            p->rgrc[0].top += ::GetSystemMetricsForDpi(SM_CYFRAME, w.dpi) +
+                                              ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, w.dpi);
+                        }
+                        return 0;
+                    }
+                    break;
+                case WM_NCHITTEST: {
+                    LRESULT r = ::DefWindowProcW(hwnd, m, wp, lp);
+                    if(r != HTCLIENT) return r;
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    ::ScreenToClient(hwnd, &pt);
+                    if(!::IsZoomed(hwnd) && pt.y < ::GetSystemMetricsForDpi(SM_CYFRAME, w.dpi)) return HTTOP;
+                    if(caption_hit(pt) != cap_none) return HTCLIENT;
+                    if(pt.y < caption_h() || (pt.x < nav_width() && pt.y < nav_top() - S(8))) return HTCAPTION;
+                    return HTCLIENT;
+                }
+                case WM_MOUSEMOVE: {
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    int hit = caption_hit(pt);
+                    if(hit != cap_hover) {
+                        cap_hover = hit;
+                        TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
+                        ::TrackMouseEvent(&tme);
+                        RECT strip{0, 0, 30000, caption_h()};
+                        ::InvalidateRect(hwnd, &strip, FALSE);
+                    }
+                    return 0;
+                }
+                case WM_MOUSELEAVE:
+                    if(cap_hover != cap_none) {
+                        cap_hover = cap_none;
+                        RECT strip{0, 0, 30000, caption_h()};
+                        ::InvalidateRect(hwnd, &strip, FALSE);
+                    }
+                    return 0;
                 case WM_LBUTTONUP: {
-                    const int x = static_cast<short>(LOWORD(lp)), y = static_cast<short>(HIWORD(lp));
-                    if(x < nav_width() && y >= nav_top()) {
-                        int i = (y - nav_top()) / nav_item_h();
-                        if(i >= 0 && i < static_cast<int>(w.sections.size())) set_scroll(w.sections[i].y - S(12));
+                    POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+                    switch(caption_hit(pt)) {
+                        case cap_min: ::ShowWindow(hwnd, SW_MINIMIZE); return 0;
+                        case cap_max: ::ShowWindow(hwnd, ::IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE); return 0;
+                        case cap_close: ::PostMessageW(hwnd, WM_CLOSE, 0, 0); return 0;
+                        default: break;
+                    }
+                    for(const nav_item& it : nav_items()) {
+                        if(::PtInRect(&it.r, pt)) {
+                            set_scroll(w.sections[it.section].y - S(12));
+                            break;
+                        }
                     }
                     return 0;
                 }
@@ -1263,10 +1425,13 @@ namespace bt::ui::config_window {
                     POINT pt;
                     ::GetCursorPos(&pt);
                     ::ScreenToClient(hwnd, &pt);
-                    if(LOWORD(lp) == HTCLIENT && pt.x < nav_width() && pt.y >= nav_top() &&
-                       (pt.y - nav_top()) / nav_item_h() < static_cast<int>(w.sections.size())) {
-                        ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
-                        return TRUE;
+                    if(LOWORD(lp) == HTCLIENT) {
+                        for(const nav_item& it : nav_items()) {
+                            if(::PtInRect(&it.r, pt)) {
+                                ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+                                return TRUE;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1312,6 +1477,8 @@ namespace bt::ui::config_window {
         const int ww = S(1100), wh = min(S(860), static_cast<int>(work.bottom - work.top) - S(40));
         w.wnd = create_window(0, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, format("{} settings", APP_LONG_NAME), nullptr,
             work.left + (work.right - work.left - ww) / 2, work.top + (work.bottom - work.top - wh) / 2, ww, wh, main_proc);
+        // apply the frameless client area computed in WM_NCCALCSIZE
+        ::SetWindowPos(w.wnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
         RECT v = view_rect();
         w.view = create_window(0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN, "", w.wnd,
             v.left, v.top, v.right - v.left, v.bottom - v.top, view_proc);
