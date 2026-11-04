@@ -1,5 +1,6 @@
 #include "picker.h"
 #include <format>
+#include <string_view>
 #include <map>
 #include <algorithm>
 #include <cmath>
@@ -24,7 +25,7 @@ namespace bt::ui {
 
         enum : int {
             ID_URL = 101, ID_TRACKERS, ID_RULE, ID_COPY, ID_EMAIL, ID_SETTINGS,
-            ID_RULE_LOC = 110, ID_RULE_VALUE, ID_RULE_SCOPE, ID_RULE_REGEX, ID_RULE_APP
+            ID_REMEMBER = 110, ID_REMEMBER_KIND, ID_REMEMBER_VALUE
         };
 
         // Segoe MDL2 Assets / Segoe Fluent Icons code points
@@ -33,7 +34,20 @@ namespace bt::ui {
         constexpr wchar_t GLYPH_COPY[] = L"";
         constexpr wchar_t GLYPH_MAIL[] = L"";
         constexpr wchar_t GLYPH_SETTINGS[] = L"";
-        constexpr wchar_t GLYPH_APP[] = L"";
+        constexpr wchar_t GLYPH_CHECK[] = L"\uE73E";
+        constexpr UINT_PTR SHIFT_TIMER = 1;
+
+        // what the remember section can match; Host is the default
+        enum remember_kind : int { kind_host = 0, kind_regex, kind_url, kind_title, kind_process };
+
+        string regex_escape(const string& s) {
+            string r;
+            for(char c : s) {
+                if(string_view{".^$|()[]{}*+?\\"}.find(c) != string_view::npos) r += '\\';
+                r += c;
+            }
+            return r;
+        }
 
         struct palette {
             COLORREF bg, text, dim, active, border, edit_bg, hint_bg, button_hover, toggle_on;
@@ -133,27 +147,22 @@ namespace bt::ui {
         btn_email = button(ID_EMAIL);
         btn_settings = button(ID_SETTINGS);
 
-        rule_loc = child(wnd, L"ComboBox", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, ID_RULE_LOC, d);
-        for(const wchar_t* s : {L"URL", L"Window title", L"Process name", L"Lua function"})
-            ::SendMessageW(rule_loc, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-        rule_value = child(wnd, L"Edit", "", ES_AUTOHSCROLL | WS_TABSTOP, 0, ID_RULE_VALUE, d);
+        rule_check = button(ID_REMEMBER);
+        rule_kind = child(wnd, L"ComboBox", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, ID_REMEMBER_KIND, d);
+        for(const wchar_t* k : {L"Host", L"Regex", L"URL contains", L"Window title", L"Process"})
+            ::SendMessageW(rule_kind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(k));
+        rule_value = child(wnd, L"Edit", "", ES_AUTOHSCROLL | WS_TABSTOP, 0, ID_REMEMBER_VALUE, d);
         ::SetWindowSubclass(rule_value, edit_proc, 2, reinterpret_cast<DWORD_PTR>(this));
-        rule_scope = child(wnd, L"ComboBox", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, ID_RULE_SCOPE, d);
-        for(const wchar_t* s : {L"Anywhere", L"Host only", L"Path only"})
-            ::SendMessageW(rule_scope, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-        rule_regex = button(ID_RULE_REGEX);
-        rule_app = button(ID_RULE_APP);
 
         tooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
             0, 0, 0, 0, wnd, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         add_tooltip(tooltip, wnd, url_edit, "Editable before opening");
         add_tooltip(tooltip, wnd, btn_trackers, "Trackers were removed from this link.\nClick to copy the original link.");
-        add_tooltip(tooltip, wnd, btn_rule, "Create a rule for the browser you pick (R)");
+        add_tooltip(tooltip, wnd, btn_rule, "Remember the choice: add a rule for the profile you pick (R, or hold Shift)");
         add_tooltip(tooltip, wnd, btn_copy, "Copy link and close");
         add_tooltip(tooltip, wnd, btn_email, "Email link and close");
         add_tooltip(tooltip, wnd, btn_settings, "Picker settings");
-        add_tooltip(tooltip, wnd, rule_regex, "Value is a regular expression");
-        add_tooltip(tooltip, wnd, rule_app, "Open as an app window (Chromium only)");
+        add_tooltip(tooltip, wnd, rule_check, "Add a rule for the profile you pick. Follows Shift until you click it.");
     }
 
     bool picker::visible() const {
@@ -206,8 +215,7 @@ namespace bt::ui {
             apply_dark_title_bar(wnd, dark);
             apply_round_corners(wnd);
             const wchar_t* theme = dark ? L"DarkMode_CFD" : nullptr;
-            ::SetWindowTheme(rule_loc, theme, nullptr);
-            ::SetWindowTheme(rule_scope, theme, nullptr);
+            ::SetWindowTheme(rule_kind, theme, nullptr);
             ::SetWindowTheme(url_edit, dark ? L"DarkMode_Explorer" : nullptr, nullptr);
             applied.dark = dark;
         }
@@ -222,7 +230,7 @@ namespace bt::ui {
         pad = scale(8, dpi);
         btn_w = scale(30, dpi);
         header_h = scale(30, dpi);
-        rule_h = rule_open ? scale(30, dpi) + pad / 2 : 0;
+        footer_h = section_open ? scale(30, dpi) : font_height(ui_font(dpi, -1));
 
         box = scale(static_cast<int>(ps.box_size), dpi);
         margin = scale(static_cast<int>(ps.item_padding), dpi);
@@ -242,8 +250,9 @@ namespace bt::ui {
 
         per_row = max(1, (w - pad * 2) / tile);
         rows = (n + per_row - 1) / per_row;
-        grid_y = pad + header_h + rule_h + pad / 2;
-        int h = grid_y + tile * rows + pad;
+        grid_y = pad + header_h + pad / 2;
+        footer_y = grid_y + tile * rows + pad / 2;
+        int h = footer_y + footer_h + pad;
         h = min(h, work_h);
         client = {w, h};
 
@@ -277,7 +286,7 @@ namespace bt::ui {
     void picker::place_controls() {
         HFONT font = ui_font(dpi);
         if(font_dpi != dpi) {
-            for(HWND h : {url_edit, rule_loc, rule_value, rule_scope}) ::SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+            for(HWND h : {url_edit, rule_kind, rule_value}) ::SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
             font_dpi = dpi;
         }
 
@@ -314,24 +323,18 @@ namespace bt::ui {
         place_field(url_edit, url_box, left, pad + (bh - edit_h) / 2, max(10, right - left));
         rule_box = {};
 
-        // rule creator row
-        const int show = rule_open ? SW_SHOWNA : SW_HIDE;
-        for(HWND h : {rule_loc, rule_value, rule_scope, rule_regex, rule_app}) ::ShowWindow(h, show);
-        if(rule_open) {
-            const int y = pad + header_h + pad / 2;
-            const int row_h = scale(30, dpi);
-            const int loc_w = scale(120, dpi), scope_w = scale(100, dpi);
+        // remember section, below the tiles so they never move away from the mouse
+        const int show = section_open ? SW_SHOWNA : SW_HIDE;
+        for(HWND h : {rule_check, rule_kind, rule_value}) ::ShowWindow(h, show);
+        if(section_open) {
+            const int y = footer_y, row_h = footer_h;
+            const int check_w = scale(110, dpi), kind_w = scale(120, dpi);
             int x = pad;
-            ::MoveWindow(rule_loc, x, y + (row_h - edit_h) / 2, loc_w, scale(200, dpi), FALSE);
-            x += loc_w + scale(4, dpi);
-            int value_w = client.cx - pad - x - scope_w - btn_w * 2 - scale(12, dpi);
-            place_field(rule_value, rule_box, x, y + (row_h - edit_h) / 2, max(10, value_w));
-            x += value_w + scale(4, dpi);
-            ::MoveWindow(rule_scope, x, y + (row_h - edit_h) / 2, scope_w, scale(200, dpi), FALSE);
-            x += scope_w + scale(4, dpi);
-            ::MoveWindow(rule_regex, x, y, btn_w, row_h, FALSE);
-            x += btn_w + scale(4, dpi);
-            ::MoveWindow(rule_app, x, y, btn_w, row_h, FALSE);
+            ::MoveWindow(rule_check, x, y, check_w, row_h, FALSE);
+            x += check_w + scale(4, dpi);
+            ::MoveWindow(rule_kind, x, y + (row_h - edit_h) / 2, kind_w, scale(200, dpi), FALSE);
+            x += kind_w + scale(4, dpi);
+            place_field(rule_value, rule_box, x, y + (row_h - edit_h) / 2, max(10, static_cast<int>(client.cx) - pad - x));
         }
     }
 
@@ -342,21 +345,19 @@ namespace bt::ui {
         choices = std::move(list);
         done = std::move(on_done);
         active = 0;
-        rule_open = false;
-        rule_regex_on = rule_app_on = false;
         closing = false;
+        // the section follows Shift until the user changes the checkbox by hand
+        shift_down = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+        remember = section_open = shift_down;
+        remember_manual = false;
+        value_edited = false;
         dark = system_uses_dark_theme();
         const bool frame_changed = apply_style();
         compute_layout();
         set_text(url_edit, cp.url);
 
-        // the rule creator starts with the link's host as a URL host rule
-        string proto, host, path;
-        match_rule::parse_url(cp.url, proto, host, path);
-        set_text(rule_value, host);
-        ::SendMessageW(rule_loc, CB_SETCURSEL, 0, 0);
-        ::SendMessageW(rule_scope, CB_SETCURSEL, host.empty() ? 0 : 1, 0);
-        ::EnableWindow(rule_scope, TRUE);
+        ::SendMessageW(rule_kind, CB_SETCURSEL, kind_host, 0);
+        fill_rule_value();
 
         place_controls();
         render();
@@ -367,6 +368,7 @@ namespace bt::ui {
         ::SetForegroundWindow(wnd);
         ::SetFocus(wnd);
         ::UpdateWindow(wnd);
+        ::SetTimer(wnd, SHIFT_TIMER, 30, nullptr);
     }
 
     void picker::warm() {
@@ -421,8 +423,7 @@ namespace bt::ui {
         ::InvalidateRect(wnd, &r2, FALSE);
     }
 
-    void picker::toggle_rule_creator() {
-        rule_open = !rule_open;
+    void picker::relayout_in_place() {
         RECT before{};
         ::GetWindowRect(wnd, &before);
         compute_layout();
@@ -438,19 +439,59 @@ namespace bt::ui {
         render();
         move_window(SWP_NOACTIVATE);
         ::InvalidateRect(wnd, nullptr, FALSE);
-        if(rule_open) ::SetFocus(rule_value);
-        else ::SetFocus(wnd);
+    }
+
+    void picker::set_remember(bool on, bool manual) {
+        if(manual) remember_manual = true;
+        remember = on;
+        // the section stays once touched by hand, so the user can uncheck without it vanishing
+        bool open = on || remember_manual;
+        if(open != section_open) {
+            section_open = open;
+            relayout_in_place();
+        }
+        for(HWND h : {rule_check, btn_rule}) ::InvalidateRect(h, nullptr, FALSE);
+    }
+
+    void picker::fill_rule_value() {
+        string proto, host, path;
+        match_rule::parse_url(cp.url, proto, host, path);
+        string v;
+        switch(static_cast<int>(::SendMessageW(rule_kind, CB_GETCURSEL, 0, 0))) {
+            case kind_host: v = host; break;
+            case kind_regex: v = host.empty() ? "" : "https?://" + regex_escape(host) + "([/?#].*)?"; break;
+            case kind_url: v = cp.url; break;
+            case kind_title: v = cp.window_title; break;
+            case kind_process: v = cp.process_name; break;
+            default: break;
+        }
+        filling_value = true;
+        set_text(rule_value, v);
+        filling_value = false;
+    }
+
+    void picker::poll_shift() {
+        // typing a capital letter into the value field must not toggle the checkbox
+        if(remember_manual || ::GetFocus() == rule_value) return;
+        bool down = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+        if(down == shift_down) return;
+        shift_down = down;
+        set_remember(down, false);
     }
 
     optional<match_rule> picker::build_rule() const {
-        if(!rule_open) return nullopt;
+        if(!remember) return nullopt;
         match_rule r;
         r.value = get_text(rule_value);
         if(r.value.empty()) return nullopt;
-        r.loc = static_cast<match_location>(max<LRESULT>(0, ::SendMessageW(rule_loc, CB_GETCURSEL, 0, 0)));
-        r.scope = static_cast<match_scope>(max<LRESULT>(0, ::SendMessageW(rule_scope, CB_GETCURSEL, 0, 0)));
-        r.is_regex = rule_regex_on;
-        r.app_mode = rule_app_on;
+        switch(static_cast<int>(::SendMessageW(rule_kind, CB_GETCURSEL, 0, 0))) {
+            case kind_host: r.loc = match_location::url; r.scope = match_scope::domain; break;
+            case kind_regex: r.loc = match_location::url; r.is_regex = true; break;
+            case kind_url: r.loc = match_location::url; break;
+            case kind_title: r.loc = match_location::window_title; break;
+            case kind_process: r.loc = match_location::process_name; break;
+            default: return nullopt;
+        }
         return r;
     }
 
@@ -469,6 +510,7 @@ namespace bt::ui {
         if(idx) choice = choices[*idx];
 
         // disappear at once; the slower focus hand-back runs after the browser has been started
+        ::KillTimer(wnd, SHIFT_TIMER);
         set_cloaked(true);
         done_fn d = std::move(done);
         done = nullptr;
@@ -483,7 +525,8 @@ namespace bt::ui {
                 set_clipboard_text(wnd, cp.raw_url);
                 break;
             case ID_RULE:
-                toggle_rule_creator();
+            case ID_REMEMBER:
+                set_remember(!remember, true);
                 break;
             case ID_COPY:
                 set_clipboard_text(wnd, get_text(url_edit));
@@ -500,19 +543,11 @@ namespace bt::ui {
                 finish(nullopt);
                 host::show_settings(1);
                 break;
-            case ID_RULE_REGEX:
-                rule_regex_on = !rule_regex_on;
-                ::InvalidateRect(rule_regex, nullptr, FALSE);
+            case ID_REMEMBER_KIND:
+                if(code == CBN_SELCHANGE && !value_edited) fill_rule_value();
                 break;
-            case ID_RULE_APP:
-                rule_app_on = !rule_app_on;
-                ::InvalidateRect(rule_app, nullptr, FALSE);
-                break;
-            case ID_RULE_LOC:
-                if(code == CBN_SELCHANGE) {
-                    bool is_url = ::SendMessageW(rule_loc, CB_GETCURSEL, 0, 0) == 0;
-                    ::EnableWindow(rule_scope, is_url);
-                }
+            case ID_REMEMBER_VALUE:
+                if(code == EN_CHANGE && !filling_value) value_edited = true;
                 break;
             default:
                 break;
@@ -524,10 +559,38 @@ namespace bt::ui {
         HDC hdc = di.hDC;
         RECT rc = di.rcItem;
         bool pressed = di.itemState & ODS_SELECTED;
-        bool on = (di.CtlID == ID_RULE && rule_open) || (di.CtlID == ID_RULE_REGEX && rule_regex_on) ||
-                  (di.CtlID == ID_RULE_APP && rule_app_on);
+        bool on = di.CtlID == ID_RULE && remember;
         COLORREF bg = on ? p.toggle_on : (pressed ? p.active : p.bg);
         ::FillRect(hdc, &rc, cached_brush(bg));
+
+        if(di.CtlID == ID_REMEMBER) {
+            // check box: a square, a tick when on, then the label
+            const int sz = scale(14, dpi);
+            RECT box{rc.left + scale(2, dpi), rc.top + (rc.bottom - rc.top - sz) / 2, 0, 0};
+            box.right = box.left + sz;
+            box.bottom = box.top + sz;
+            HBRUSH fill = cached_brush(remember ? p.toggle_on : p.edit_bg);
+            HGDIOBJ old_b = ::SelectObject(hdc, fill);
+            HPEN pen = ::CreatePen(PS_SOLID, 1, p.border);
+            HGDIOBJ old_p = ::SelectObject(hdc, pen);
+            ::RoundRect(hdc, box.left, box.top, box.right, box.bottom, scale(3, dpi), scale(3, dpi));
+            ::SelectObject(hdc, old_p);
+            ::SelectObject(hdc, old_b);
+            ::DeleteObject(pen);
+            ::SetBkMode(hdc, TRANSPARENT);
+            ::SetTextColor(hdc, p.text);
+            if(remember) {
+                HGDIOBJ old_f = ::SelectObject(hdc, icon_font(dpi, 8));
+                ::DrawTextW(hdc, GLYPH_CHECK, -1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                ::SelectObject(hdc, old_f);
+            }
+            RECT text = rc;
+            text.left = box.right + scale(6, dpi);
+            HGDIOBJ old_f = ::SelectObject(hdc, ui_font(dpi));
+            ::DrawTextW(hdc, L"Remember", -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            ::SelectObject(hdc, old_f);
+            return;
+        }
 
         const wchar_t* glyph{nullptr};
         HFONT font = icon_font(dpi);
@@ -538,8 +601,6 @@ namespace bt::ui {
             case ID_COPY: glyph = GLYPH_COPY; break;
             case ID_EMAIL: glyph = GLYPH_MAIL; break;
             case ID_SETTINGS: glyph = GLYPH_SETTINGS; break;
-            case ID_RULE_APP: glyph = GLYPH_APP; break;
-            case ID_RULE_REGEX: glyph = L".*"; font = ui_font(dpi, 1, true); break;
             default: break;
         }
         if(!glyph) return;
@@ -681,6 +742,16 @@ namespace bt::ui {
         }
         paint_tiles(hdc);
 
+        if(!section_open && !choices.empty()) {
+            RECT hint{pad, footer_y, w - pad, footer_y + footer_h};
+            ::SetBkMode(hdc, TRANSPARENT);
+            ::SetTextColor(hdc, pal.dim);
+            HGDIOBJ old_f = ::SelectObject(hdc, ui_font(dpi, -1));
+            ::DrawTextW(hdc, L"Hold Shift and click a profile to remember this host for it (or press R)", -1, &hint,
+                DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            ::SelectObject(hdc, old_f);
+        }
+
         int bw = g_state.picker.border_width;
         if(bw > 0 && !g_state.picker.show_native_chrome) {
             HBRUSH b = cached_brush(pal.border);
@@ -758,6 +829,9 @@ namespace bt::ui {
             case WM_CLOSE:
                 finish(nullopt);
                 return 0;
+            case WM_TIMER:
+                if(w == SHIFT_TIMER) poll_shift();
+                return 0;
             case WM_APP_PARK:
                 if(cloaked) park();   // a new show() may have happened in between
                 return 0;
@@ -814,7 +888,7 @@ namespace bt::ui {
                         set_active(active + 1);
                         return 0;
                     case 'R':
-                        toggle_rule_creator();
+                        set_remember(!remember, true);
                         return 0;
                     default:
                         break;

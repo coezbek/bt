@@ -46,15 +46,19 @@ namespace bt::ui {
         HWND url_edit{nullptr};
         HWND tooltip{nullptr};
         HWND btn_trackers{nullptr}, btn_rule{nullptr}, btn_copy{nullptr}, btn_email{nullptr}, btn_settings{nullptr};
-        HWND rule_loc{nullptr}, rule_value{nullptr}, rule_scope{nullptr}, rule_regex{nullptr}, rule_app{nullptr};
+        HWND rule_check{nullptr}, rule_kind{nullptr}, rule_value{nullptr};
 
         click_payload cp;
         std::vector<profile_selection> choices;
         done_fn done;
         int active{0};
-        bool rule_open{false};
-        bool rule_regex_on{false};
-        bool rule_app_on{false};
+        // remember section: adds a rule for the profile that gets picked
+        bool remember{false};           // the checkbox
+        bool remember_manual{false};    // changed by hand; Shift no longer drives it
+        bool section_open{false};
+        bool shift_down{false};
+        bool value_edited{false};       // the user typed a value; switching kind keeps it
+        bool filling_value{false};
         bool dark{false};
         bool closing{false};
         bool cloaked{false};
@@ -62,7 +66,7 @@ namespace bt::ui {
 
         // layout in pixels for the current DPI
         UINT dpi{96};
-        int pad{0}, header_h{0}, rule_h{0}, btn_w{0};
+        int pad{0}, header_h{0}, footer_y{0}, footer_h{0}, btn_w{0};
         int box{0}, margin{0}, tile{0}, per_row{1}, rows{1}, grid_x{0}, grid_y{0};
         int icon_px{0}, label_lines{0}, label_h{0};
         SIZE client{};
@@ -101,7 +105,10 @@ namespace bt::ui {
         int hit_test(POINT pt) const;
         RECT tile_rect(int i) const;
         void set_active(int i);
-        void toggle_rule_creator();
+        void relayout_in_place();
+        void set_remember(bool on, bool manual);
+        void fill_rule_value();
+        void poll_shift();
         void choose(int i);
         void finish(std::optional<int> idx);
         void on_command(int id, int code);
