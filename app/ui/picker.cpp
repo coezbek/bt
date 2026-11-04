@@ -161,7 +161,7 @@ namespace bt::ui {
         add_tooltip(tooltip, wnd, btn_rule, "Remember the choice: add a rule for the profile you pick (R, or hold Shift)");
         add_tooltip(tooltip, wnd, btn_copy, "Copy link and close");
         add_tooltip(tooltip, wnd, btn_email, "Email link and close");
-        add_tooltip(tooltip, wnd, btn_settings, "Picker settings");
+        add_tooltip(tooltip, wnd, btn_settings, "Settings");
         add_tooltip(tooltip, wnd, rule_check, "Add a rule for the profile you pick. Follows Shift until you click it.");
     }
 
@@ -541,7 +541,7 @@ namespace bt::ui {
             }
             case ID_SETTINGS:
                 finish(nullopt);
-                host::show_settings(1);
+                host::show_config();
                 break;
             case ID_REMEMBER_KIND:
                 if(code == CBN_SELCHANGE && !value_edited) fill_rule_value();
