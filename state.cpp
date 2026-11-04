@@ -310,35 +310,46 @@ namespace bt {
         const string path = get_path();
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path{path}.parent_path(), ec);
+        last_write_time = write_time_of(path);
 
         fkyaml::node root = fkyaml::node::mapping();
         if(std::ifstream ifs{path}; ifs) {
             try {
                 root = fkyaml::node::deserialize(ifs);
-            } catch(const fkyaml::exception&) {
-                root = fkyaml::node::mapping();
+            } catch(const fkyaml::exception& e) {
+                // keep what we have and do not save over the file; the user fixes the typo
+                error = e.what();
+                return;
             }
             if(root.get_type() != fkyaml::node_type::MAPPING) root = fkyaml::node::mapping();
         }
-        s = state{};
-        from_node(root, s);
-        last_write_time = write_time_of(path);
+        error.clear();
+        state fresh;
+        from_node(root, fresh);
+        s = std::move(fresh);
     }
 
-    void config_store::save(const state& s) {
+    bool config_store::save(const state& s) {
+        if(!error.empty()) return false;
         const string path = get_path();
+        const string tmp = path + ".tmp";
         fkyaml::node root;
         to_node(root, s);
         {
-            std::ofstream ofs{path, std::ios::out | std::ios::trunc};
+            std::ofstream ofs{tmp, std::ios::out | std::ios::trunc};
             ofs << root;
+            if(!ofs) return false;
         }
+        std::error_code ec;
+        std::filesystem::rename(tmp, path, ec);   // atomic replace on NTFS
+        if(ec) return false;
         last_write_time = write_time_of(path);
+        return true;
     }
 
     bool config_store::reload_if_changed(state& s) {
         if(write_time_of(get_path()) == last_write_time) return false;
         load(s);
-        return true;
+        return error.empty();
     }
 }

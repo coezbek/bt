@@ -149,8 +149,17 @@ namespace bt {
      */
     class config_store {
     public:
+        /**
+         * @brief Loads config.yml. When the file does not parse, the state stays as it was and the store
+         * refuses to save until a later load succeeds, so a typo never costs the user their rules.
+         */
         void load(state& s);
-        void save(const state& s);
+
+        /**
+         * @brief Writes config.yml through a temporary file, so readers never see half a file.
+         * @return false when nothing was written because the file on disk is broken.
+         */
+        bool save(const state& s);
 
         /**
          * @brief Reloads when the file on disk is newer than what we last read or wrote.
@@ -160,7 +169,13 @@ namespace bt {
 
         [[nodiscard]] std::string get_path() const;
 
+        /**
+         * @brief The parse error of the file on disk, empty when it loaded fine.
+         */
+        [[nodiscard]] const std::string& get_error() const { return error; }
+
     private:
         std::filesystem::file_time_type last_write_time{};
+        std::string error;
     };
 }

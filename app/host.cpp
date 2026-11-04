@@ -66,6 +66,7 @@ namespace bt::host {
         }
 
         void sync_startup() {
+            if(!g_config.get_error().empty()) return;   // the setting is unknown while config.yml is broken
             HKEY key{nullptr};
             if(::RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return;
             // the fork used to register under the original name; drop that entry so it does not start twice
@@ -81,6 +82,20 @@ namespace bt::host {
                 ::RegDeleteValueW(key, name.c_str());
             }
             ::RegCloseKey(key);
+        }
+
+        /**
+         * @brief Tells the user once per error that config.yml does not parse and is left alone.
+         */
+        void warn_if_config_broken() {
+            static string warned;
+            const string& e = g_config.get_error();
+            if(e.empty() || e == warned) return;
+            warned = e;
+            ui::message_box(nullptr, APP_LONG_NAME,
+                format("config.yml has an error and was not loaded:\n\n{}\n\n{} keeps working with the settings it had "
+                       "and does not save until the file is fixed.\n\n{}", e, APP_LONG_NAME, g_config.get_path()),
+                MB_OK | MB_ICONWARNING);
         }
 
         void save_now() {
@@ -114,6 +129,7 @@ namespace bt::host {
                 g_pipeline.load();
                 ui::config_window::state_reloaded();
             }
+            warn_if_config_broken();
         }
 
         click_payload make_payload(const request& r) {
@@ -444,11 +460,12 @@ namespace bt::host {
         toast.create();
         trace("windows created");
 
-        // first start ever: find the browsers before routing anything
-        if(g_state.browsers.empty()) rediscover();
+        // first start ever: find the browsers before routing anything. Not when config.yml is merely broken.
+        if(g_state.browsers.empty() && g_config.get_error().empty()) rediscover();
 
         sync_tray();
         sync_startup();
+        warn_if_config_broken();
 
         handle(first);
         ::PostMessageW(wnd, ui::WM_APP_WARM, 0, 0);
