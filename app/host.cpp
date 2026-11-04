@@ -117,6 +117,9 @@ namespace bt::host {
         };
         vector<pending_rule> pending_rules;
 
+        // when scripts.lua was loaded; set at startup, so an edit made before the first click counts
+        filesystem::file_time_type script_time{};
+
         /**
          * @brief Picks up config.yml changes made outside this process (bt browser set default, hand edits).
          */
@@ -126,10 +129,6 @@ namespace bt::host {
                 return;
             }
             // scripts.lua may be edited in any editor; the old per-click process always read it fresh
-            static filesystem::file_time_type script_time = [] {
-                error_code ec;
-                return filesystem::last_write_time(g_script.get_path(), ec);
-            }();
             error_code ec;
             auto t = filesystem::last_write_time(g_script.get_path(), ec);
             if(!ec && t != script_time) {
@@ -494,6 +493,10 @@ namespace bt::host {
         ui::icons::init();
         ui::on_modal_end([] { ::PostMessageW(wnd, ui::WM_APP_DEFERRED, 0, 0); });
         bt_init_core();
+        {
+            error_code ec;
+            script_time = filesystem::last_write_time(g_script.get_path(), ec);
+        }
         trace("core loaded");
 
         const HINSTANCE inst = ::GetModuleHandleW(nullptr);
