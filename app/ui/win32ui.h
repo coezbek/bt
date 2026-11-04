@@ -11,6 +11,7 @@ namespace bt::ui {
     constexpr UINT WM_APP_TRAY = WM_APP + 2;
     constexpr UINT WM_APP_WARM = WM_APP + 3;
     constexpr UINT WM_APP_PARK = WM_APP + 4;
+    constexpr UINT WM_APP_DEFERRED = WM_APP + 5;   // run work deferred while a dialog was open
 
     std::wstring wide(const std::string& s);
     std::string narrow(const std::wstring& s);
@@ -65,6 +66,27 @@ namespace bt::ui {
      * @brief Runs a nested message loop while hwnd lives, with owner disabled.
      */
     void run_modal(HWND hwnd, HWND owner);
+
+    /**
+     * @brief Marks a modal dialog (our own loop, a message box, a common dialog) for its lifetime.
+     *
+     * Code that opened a dialog often holds references into g_state.browsers until it returns, while the
+     * dialog's message loop keeps handling clicks and tray commands. The host defers anything that would
+     * replace or grow those vectors until the last modal_scope ends.
+     */
+    struct modal_scope {
+        modal_scope();
+        ~modal_scope();
+        modal_scope(const modal_scope&) = delete;
+        modal_scope& operator=(const modal_scope&) = delete;
+    };
+
+    bool in_modal();
+
+    /**
+     * @brief Called when the last modal_scope ends; the host runs deferred work there.
+     */
+    void on_modal_end(std::function<void()> fn);
 
     /**
      * @brief Creates a child control with the default UI font.

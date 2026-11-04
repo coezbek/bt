@@ -555,7 +555,12 @@ namespace bt::ui::config_window {
             cc.rgbResult = RGB(p.user_color.r8(), p.user_color.g8(), p.user_color.b8());
             cc.lpCustColors = custom;
             cc.Flags = CC_RGBINIT | CC_FULLOPEN;
-            if(::ChooseColorW(&cc)) {
+            bool chosen{false};
+            {
+                modal_scope scope;
+                chosen = ::ChooseColorW(&cc) != FALSE;
+            }
+            if(chosen) {
                 p.user_color = grey::rgb_colour::from_bytes(GetRValue(cc.rgbResult), GetGValue(cc.rgbResult), GetBValue(cc.rgbResult));
                 p.use_user_color = true;
                 icons::clear();
@@ -691,7 +696,10 @@ namespace bt::ui::config_window {
                 });
                 hr -= S(104);
                 glyph_button(hr, hc.top, hc.bottom, G_DELETE, "Delete browser", [bi] {
-                    if(::MessageBoxW(w.wnd, L"Delete this browser and all its rules?", L"Delete", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+                    {
+                        modal_scope scope;
+                        if(::MessageBoxW(w.wnd, L"Delete this browser and all its rules?", L"Delete", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+                    }
                     g_state.browsers.erase(g_state.browsers.begin() + bi);
                     changed();
                     request_rebuild();

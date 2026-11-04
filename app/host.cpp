@@ -107,10 +107,24 @@ namespace bt::host {
             sync_startup();
         }
 
+        // Work that would replace or grow g_state.browsers (or a profile's rules) while a dialog holds
+        // references into them; it runs when the last dialog closes.
+        bool pending_rediscover{false};
+        bool pending_reload{false};
+        struct pending_rule {
+            string browser_name, profile_name;
+            match_rule rule;
+        };
+        vector<pending_rule> pending_rules;
+
         /**
          * @brief Picks up config.yml changes made outside this process (bt browser set default, hand edits).
          */
         void reload_if_changed() {
+            if(ui::in_modal()) {
+                pending_reload = true;
+                return;
+            }
             // scripts.lua may be edited in any editor; the old per-click process always read it fresh
             static filesystem::file_time_type script_time = [] {
                 error_code ec;
@@ -174,10 +188,39 @@ namespace bt::host {
             }
         }
 
+        void apply_rule(const string& browser_name, const string& profile_name, const match_rule& rule) {
+            for(browser& b : g_state.browsers) {
+                if(b.name != browser_name) continue;
+                for(browser_profile& p : b.profiles) {
+                    if(p.name != profile_name) continue;
+                    if(ranges::find(p.rules, rule) == p.rules.end()) p.rules.push_back(rule);
+                    state_changed();
+                    ui::config_window::state_reloaded();
+                    return;
+                }
+            }
+        }
+
         void add_rule(const profile_selection& choice, const match_rule& rule) {
-            auto& p = const_cast<browser_profile&>(choice.p());
-            if(ranges::find(p.rules, rule) == p.rules.end()) p.rules.push_back(rule);
-            state_changed();
+            if(ui::in_modal()) {
+                pending_rules.push_back({choice.b().name, choice.p().name, rule});
+                return;
+            }
+            apply_rule(choice.b().name, choice.p().name, rule);
+        }
+
+        void run_deferred() {
+            auto rules = std::move(pending_rules);
+            pending_rules.clear();
+            for(auto& r : rules) apply_rule(r.browser_name, r.profile_name, r.rule);
+            if(pending_reload) {
+                pending_reload = false;
+                reload_if_changed();
+            }
+            if(pending_rediscover) {
+                pending_rediscover = false;
+                rediscover();
+            }
         }
 
         /**
@@ -336,6 +379,9 @@ namespace bt::host {
                             break;
                     }
                     return 0;
+                case ui::WM_APP_DEFERRED:
+                    if(!ui::in_modal()) run_deferred();
+                    return 0;
                 case ui::WM_APP_WARM:
                     // decode icons now, so the first picker does not have to
                     ui::icons::warm(ui::picker::icon_size_for_dpi(::GetDpiForSystem()), g_state.icon_overlay);
@@ -385,6 +431,10 @@ namespace bt::host {
     }
 
     void rediscover() {
+        if(ui::in_modal()) {
+            pending_rediscover = true;
+            return;
+        }
         if(picker.visible()) picker.cancel();
         vector<browser> fresh = discovery::discover_all_browsers();
         // rediscover profiles of manually added browsers
@@ -441,6 +491,7 @@ namespace bt::host {
             return EXCEPTION_CONTINUE_SEARCH;
         });
         ui::icons::init();
+        ui::on_modal_end([] { ::PostMessageW(wnd, ui::WM_APP_DEFERRED, 0, 0); });
         bt_init_core();
         trace("core loaded");
 

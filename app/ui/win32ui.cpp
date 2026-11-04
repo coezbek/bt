@@ -161,6 +161,7 @@ namespace bt::ui {
 
     static string run_file_dialog(HWND owner, const wstring& title, FILEOPENDIALOGOPTIONS extra,
         const vector<pair<wstring, wstring>>& filters) {
+        modal_scope scope;
         string result;
         IFileOpenDialog* dlg{nullptr};
         if(FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
@@ -196,6 +197,7 @@ namespace bt::ui {
     }
 
     void message_box(HWND owner, const string& title, const string& text, UINT flags) {
+        modal_scope scope;
         ::MessageBoxW(owner, wide(text).c_str(), wide(title).c_str(), flags);
     }
 
@@ -226,7 +228,23 @@ namespace bt::ui {
         return false;
     }
 
+    static int modal_depth{0};
+    static function<void()> modal_end;
+
+    modal_scope::modal_scope() { modal_depth++; }
+
+    modal_scope::~modal_scope() {
+        // the host's handler posts a message, so deferred work runs after the code that opened the
+        // dialog has returned and dropped its references
+        if(--modal_depth == 0 && modal_end) modal_end();
+    }
+
+    bool in_modal() { return modal_depth > 0; }
+
+    void on_modal_end(function<void()> fn) { modal_end = std::move(fn); }
+
     void run_modal(HWND hwnd, HWND owner) {
+        modal_scope scope;
         if(owner) ::EnableWindow(owner, FALSE);
         MSG msg;
         while(::IsWindow(hwnd)) {
