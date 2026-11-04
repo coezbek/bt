@@ -512,11 +512,14 @@ namespace bt::ui {
         // disappear at once; the slower focus hand-back runs after the browser has been started
         ::KillTimer(wnd, SHIFT_TIMER);
         set_cloaked(true);
+        // Finish our own state before the callback: launching can show an error box whose message loop
+        // may run a new show() for the next link, which must not be undone afterwards.
         done_fn d = std::move(done);
         done = nullptr;
-        if(d) d(choice, cp, rule);
         choices.clear();
+        const click_payload final_cp = cp;
         ::PostMessageW(wnd, WM_APP_PARK, 0, 0);
+        if(d) d(choice, final_cp, rule);
     }
 
     void picker::on_command(int id, int code) {
