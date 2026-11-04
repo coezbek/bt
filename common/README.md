@@ -6,3 +6,5 @@ Small non-UI helpers (strings, files, processes, registry, HTTP) taken from
 Browser Tamer used to pull all of grey, including its ImGui UI layer. The Win32 build only needs
 these helpers, so they live here and the ImGui dependency is gone. `colour.h` replaces grey's
 ImGui-based `rgb_colour`.
+
+Changes from upstream are marked "Browser Torero change" in the code (short HTTP timeouts in `http.cpp`).

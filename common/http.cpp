@@ -20,6 +20,10 @@ namespace grey::common {
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             WINHTTP_NO_PROXY_NAME,
             WINHTTP_NO_PROXY_BYPASS, 0);
+        // Browser Torero change: the unshortener runs while the user waits for a link to open, on the
+        // UI thread of the resident process. WinHTTP's defaults (60 s connect, 30 s receive) would freeze
+        // the picker and every other click on a slow network. Give up after a few seconds instead.
+        if(hSession) ::WinHttpSetTimeouts(hSession, 1500, 1500, 1500, 2500);
 #endif
     }
 
