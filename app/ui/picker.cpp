@@ -30,7 +30,7 @@ namespace bt::ui {
 
         // Segoe MDL2 Assets / Segoe Fluent Icons code points
         constexpr wchar_t GLYPH_SHIELD[] = L"";
-        constexpr wchar_t GLYPH_RULE[] = L"";
+        constexpr wchar_t GLYPH_RULE[] = L"\uE718";   // pin: remember
         constexpr wchar_t GLYPH_COPY[] = L"";
         constexpr wchar_t GLYPH_MAIL[] = L"";
         constexpr wchar_t GLYPH_SETTINGS[] = L"";
@@ -159,7 +159,7 @@ namespace bt::ui {
             0, 0, 0, 0, wnd, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         add_tooltip(tooltip, wnd, url_edit, "Editable before opening");
         add_tooltip(tooltip, wnd, btn_trackers, "Trackers were removed from this link.\nClick to copy the original link.");
-        add_tooltip(tooltip, wnd, btn_rule, "Remember the choice: add a rule for the profile you pick (R, or hold Shift)");
+        add_tooltip(tooltip, wnd, btn_rule, "Remember: add a rule for the profile you pick. Same as the Remember box, R, or holding Shift.");
         add_tooltip(tooltip, wnd, btn_copy, "Copy link and close");
         add_tooltip(tooltip, wnd, btn_email, "Email link and close");
         add_tooltip(tooltip, wnd, btn_settings, "Settings");
