@@ -10,7 +10,7 @@ project ("Browser Tamer"
         LANGUAGES CXX)
 
 if(NOT WIN32)
-    message(FATAL_ERROR "This branch of Browser Tamer builds for Windows only.")
+    message(FATAL_ERROR "Browser Torero builds for Windows only.")
 endif()
 
 # UNICODE affects the Win32 API, _UNICODE the CRT entry point
@@ -113,7 +113,9 @@ endforeach()
 set(CPACK_PACKAGE_NAME "BrowserTamer")
 set(CPACK_PACKAGE_VENDOR "@aloneguid")
 set(CPACK_PACKAGE_CONTACT "@aloneguid")
-set(CPACK_PACKAGE_DISPLAY_NAME ${PROJECT_NAME})
+# Shown as "Browser Torero"; the project, package and folder names stay "Browser Tamer" so upgrades and
+# the existing config keep working.
+set(CPACK_PACKAGE_DISPLAY_NAME "Browser Torero")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "BrowserTamer")
 install(TARGETS ${PROJECT_SLUG} RUNTIME DESTINATION ".")
 install(FILES "${RULES_JSON_PATH}" DESTINATION ".")
@@ -148,11 +150,11 @@ set(CPACK_WIX_LICENSE_RTF "${CMAKE_SOURCE_DIR}/resources/LICENSE.rtf")
 set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/icon.ico")
 set(CPACK_WIX_UI_BANNER "${CMAKE_SOURCE_DIR}/resources/wix/wix_banner.png")
 set(CPACK_WIX_UI_DIALOG "${CMAKE_SOURCE_DIR}/resources/wix/wix_dialog.png")
-set(CPACK_WIX_PROGRAM_MENU_FOLDER "Browser Tamer")
+set(CPACK_WIX_PROGRAM_MENU_FOLDER "Browser Torero")
 set(CPACK_WIX_PROPERTY_APPHELPLINK "${PROJECT_HOMEPAGE_URL}")
 set(CPACK_WIX_PATCH_FILE "${CMAKE_SOURCE_DIR}/resources/wix/patch.xml")
 
 set_property(INSTALL "$<TARGET_FILE_NAME:bt>"
-        PROPERTY CPACK_START_MENU_SHORTCUTS "${PROJECT_NAME}"
+        PROPERTY CPACK_START_MENU_SHORTCUTS "Browser Torero"
 )
 include(CPack) # needs to be at the end of install configurations

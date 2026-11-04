@@ -40,7 +40,7 @@ namespace bt {
                         return myself_is_default;
                     },
                     []() {
-                        win32::shell::open_default_apps(APP_LONG_NAME, true);
+                        win32::shell::open_default_apps(APP_REGISTERED_NAME, true);
                         return true;
                     }
                 }

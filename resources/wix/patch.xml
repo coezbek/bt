@@ -6,13 +6,13 @@
             <RegistryValue Type="string" Value='"[#CM_FP_bt.exe]" "%1"' />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\x-bt">
-            <RegistryValue Type="string" Value="URL:BrowserTamer Protocol" />
+            <RegistryValue Type="string" Value="URL:Browser Torero Protocol" />
             <RegistryValue Type="string" Name="URL Protocol" Value="" />
         </RegistryKey>
 
         <!-- URL and File associations -->
         <RegistryKey Root="HKCU" Key="Software\Clients\StartMenuInternet\BrowserTamer">
-            <RegistryValue Type="string" Value="Browser Tamer" />
+            <RegistryValue Type="string" Value="Browser Torero" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Clients\StartMenuInternet\BrowserTamer\DefaultIcon">
             <RegistryValue Type="string" Value="[#CM_FP_bt.exe],0" />
@@ -21,7 +21,7 @@
             <RegistryValue Type="string" Value="[#CM_FP_bt.exe]" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Clients\StartMenuInternet\BrowserTamer\Capabilities">
-            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Tamer" />
+            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Torero" />
             <RegistryValue Type="string" Name="ApplicationDescription" Value="Redirects open URLs to a browser of your choice." />
             <RegistryValue Type="string" Name="ApplicationIcon" Value="[#CM_FP_bt.exe],0" />
         </RegistryKey>
@@ -47,11 +47,11 @@
 
         <!-- protocol handlers referenced in URL/File associations -->
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerHTM">
-            <RegistryValue Type="string" Value="Browser Tamer Document" />
+            <RegistryValue Type="string" Value="Browser Torero Document" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerHTM\Application">
             <RegistryValue Type="string" Name="ApplicationDescription" Value="Redirects open URLs to a browser of your choice." />
-            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Tamer" />
+            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Torero" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerHTM\DefaultIcon">
             <RegistryValue Type="string" Value="[#CM_FP_bt.exe],0" />
@@ -61,11 +61,11 @@
         </RegistryKey>
 
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerPDF">
-            <RegistryValue Type="string" Value="Browser Tamer Document" />
+            <RegistryValue Type="string" Value="Browser Torero Document" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerPDF\Application">
             <RegistryValue Type="string" Name="ApplicationDescription" Value="Redirects open URLs to a browser of your choice." />
-            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Tamer" />
+            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Torero" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerPDF\DefaultIcon">
             <RegistryValue Type="string" Value="[#CM_FP_bt.exe],1" />
@@ -75,11 +75,11 @@
         </RegistryKey>
 
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerEPUB">
-            <RegistryValue Type="string" Value="Browser Tamer Document" />
+            <RegistryValue Type="string" Value="Browser Torero Document" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerEPUB\Application">
             <RegistryValue Type="string" Name="ApplicationDescription" Value="Redirects open URLs to a browser of your choice." />
-            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Tamer" />
+            <RegistryValue Type="string" Name="ApplicationName" Value="Browser Torero" />
         </RegistryKey>
         <RegistryKey Root="HKCU" Key="Software\Classes\BrowserTamerEPUB\DefaultIcon">
             <RegistryValue Type="string" Value="[#CM_FP_bt.exe],2" />

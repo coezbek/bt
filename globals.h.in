@@ -35,10 +35,16 @@
 #define APP_SHORT_NAME "@PROJECT_SLUG@"
 
 #if _DEBUG
-#define APP_LONG_NAME "@PROJECT_NAME@ Dev"
+#define APP_LONG_NAME "Browser Torero Dev"
 #else
-#define APP_LONG_NAME "@PROJECT_NAME@"
+#define APP_LONG_NAME "Browser Torero"
 #endif
+
+// Browser Torero is a fork of Browser Tamer. Windows knows the app under the original name (registered
+// application, default-apps entry, settings key) and the config folder keeps it too, so an existing
+// install, its config and its default-browser setting carry over.
+#define APP_REGISTERED_NAME "@PROJECT_NAME@"
+#define APP_UPSTREAM_URL "https://github.com/aloneguid/bt"
 
 #define CONFIG_NAME "@PROJECT_NAME@"
 

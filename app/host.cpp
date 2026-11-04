@@ -68,6 +68,8 @@ namespace bt::host {
         void sync_startup() {
             HKEY key{nullptr};
             if(::RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return;
+            // the fork used to register under the original name; drop that entry so it does not start twice
+            ::RegDeleteValueW(key, ui::wide(APP_REGISTERED_NAME).c_str());
             const wstring name = ui::wide(APP_LONG_NAME);
             if(g_state.run_at_startup) {
                 wchar_t exe[MAX_PATH]{};
